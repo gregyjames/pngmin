@@ -30,6 +30,13 @@ pub struct PngInfo {
     pub image_type: ImageType
 }
 
+pub struct Pixel{
+    Red: u8,
+    Green: u8,
+    Blue: u8,
+    Alpha: u8,
+}
+
 // https://www.w3.org/TR/png-3/#4Concepts.Encoding
 const PNG_SIG: [u8; 8] = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 const IHDR: [u8; 4] = [0x49, 0x48, 0x44, 0x52];
@@ -178,67 +185,100 @@ fn main() -> anyhow::Result<()> {
         unfilter_row(filter_type, bytes_per_pixel, source, prev, dest);
     }
 
-    fn paeth_predictor(a: u8, b: u8, c: u8) -> u8{
-        //convert to i32 since we may need negatives here for abs
-        let a = a as i32;
-        let b = b as i32;
-        let c = c as i32;
+    let mut pixels: Vec<Pixel> = Vec::with_capacity(width * height);
 
-        let p = a + b - c;
-        let pa = (p - a).abs();
-        let pb = (p - b).abs();
-        let pc = (p - c).abs();
-
-        if pa <= pb && pa <= pc {
-            a as u8
-        } else if pb <= pc {
-            b as u8
-        }
-        else {
-            c as u8
-        }
-    }
-    fn unfilter_row(filter_type: u8, bytes_per_pixel: usize, src: &[u8], prev: Option<Vec<u8>>, dst: &mut [u8]){
-        let prev = prev.unwrap_or(vec![0u8; src.len()]);
-
-        match filter_type {
-            0 => { // None
-                dst.copy_from_slice(src);
-            },
-            1 => { // Sub
-                for i in 0..src.len() {
-                    let left = if i >= bytes_per_pixel { dst[i - bytes_per_pixel] } else { 0 };
-                    dst[i] = src[i].wrapping_add(left);
-                }
-            },
-            2 => { // Up
-                // Recon(x) = Filt(x) + Recon(b)
-                for i in 0..src.len() {
-                    dst[i] = src[i].wrapping_add(prev[i]);
-                }
-            },
-            3 => { // Avg
-                // Recon(x) = Filt(x) + floor((Recon(a) + Recon(b)) / 2)
-                for i in 0..src.len() {
-                    let left = if i >= bytes_per_pixel { dst[i - bytes_per_pixel] } else { 0 };
-                    let up = prev[i];
-                    let avg = ((left as u16 + up as u16) / 2) as u8;
-                    dst[i] = src[i].wrapping_add(avg);
-                }
-            },
-            4 => { // Paeth
-                for i in 0..src.len() {
-                    let top = prev[i];
-                    let left = if i >= bytes_per_pixel { dst[i - bytes_per_pixel] } else { 0 };
-                    let top_left = if i >= bytes_per_pixel { prev[i - bytes_per_pixel] } else { 0 };
-                    let p = paeth_predictor(left, top, top_left);
-                    dst[i] = src[i].wrapping_add(p);
-                }
+    match info.image_type {
+        ImageType::Truecolor => {
+            for i in 0..(width * height) {
+                let r = unfiltered[i * 3];
+                let g = unfiltered[i * 3 + 1];
+                let b = unfiltered[i * 3 + 2];
+                pixels.push(Pixel {
+                    Red: r,
+                    Green: g,
+                    Blue: b,
+                    Alpha: 255,
+                });
             }
-            _ => {
-                panic!("Unsupported filter type: {}", filter_type);
+        },
+        ImageType::TruecolorAlpha => {
+            for i in 0..(width * height) {
+                let r = unfiltered[i * 4];
+                let g = unfiltered[i * 4 + 1];
+                let b = unfiltered[i * 4 + 2];
+                let a = unfiltered[i * 4 + 3];
+                pixels.push(Pixel {
+                    Red: r,
+                    Green: g,
+                    Blue: b,
+                    Alpha: a,
+                });
             }
-        }
+        },
+        _ => unreachable!()
     }
     Ok(())
+}
+
+fn paeth_predictor(a: u8, b: u8, c: u8) -> u8{
+    //convert to i32 since we may need negatives here for abs
+    let a = a as i32;
+    let b = b as i32;
+    let c = c as i32;
+
+    let p = a + b - c;
+    let pa = (p - a).abs();
+    let pb = (p - b).abs();
+    let pc = (p - c).abs();
+
+    if pa <= pb && pa <= pc {
+        a as u8
+    } else if pb <= pc {
+        b as u8
+    }
+    else {
+        c as u8
+    }
+}
+fn unfilter_row(filter_type: u8, bytes_per_pixel: usize, src: &[u8], prev: Option<Vec<u8>>, dst: &mut [u8]){
+    let prev = prev.unwrap_or(vec![0u8; src.len()]);
+
+    match filter_type {
+        0 => { // None
+            dst.copy_from_slice(src);
+        },
+        1 => { // Sub
+            for i in 0..src.len() {
+                let left = if i >= bytes_per_pixel { dst[i - bytes_per_pixel] } else { 0 };
+                dst[i] = src[i].wrapping_add(left);
+            }
+        },
+        2 => { // Up
+            // Recon(x) = Filt(x) + Recon(b)
+            for i in 0..src.len() {
+                dst[i] = src[i].wrapping_add(prev[i]);
+            }
+        },
+        3 => { // Avg
+            // Recon(x) = Filt(x) + floor((Recon(a) + Recon(b)) / 2)
+            for i in 0..src.len() {
+                let left = if i >= bytes_per_pixel { dst[i - bytes_per_pixel] } else { 0 };
+                let up = prev[i];
+                let avg = ((left as u16 + up as u16) / 2) as u8;
+                dst[i] = src[i].wrapping_add(avg);
+            }
+        },
+        4 => { // Paeth
+            for i in 0..src.len() {
+                let top = prev[i];
+                let left = if i >= bytes_per_pixel { dst[i - bytes_per_pixel] } else { 0 };
+                let top_left = if i >= bytes_per_pixel { prev[i - bytes_per_pixel] } else { 0 };
+                let p = paeth_predictor(left, top, top_left);
+                dst[i] = src[i].wrapping_add(p);
+            }
+        }
+        _ => {
+            panic!("Unsupported filter type: {}", filter_type);
+        }
+    }
 }
