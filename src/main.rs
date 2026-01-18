@@ -163,20 +163,23 @@ fn main() -> anyhow::Result<()> {
         let source = &raw[start + 1 .. start + 1 + row_bytes];
 
         let dest_row_start = row * row_bytes;
-        let dest = &mut unfiltered[dest_row_start..dest_row_start + row_bytes];
-        //println!("{:?}", filter_type);
 
         let prev = if row == 0 {
             None
         } else {
-            Some(&unfiltered[(row - 1) * row_bytes .. row * row_bytes])
+            let prev_start = (row - 1) * row_bytes;
+            let prev_data = unfiltered[prev_start..prev_start + row_bytes].to_vec();
+            Some(prev_data)
         };
+        
+        let dest = &mut unfiltered[dest_row_start..dest_row_start + row_bytes];
+        //println!("{:?}", filter_type);
 
         unfilter_row(filter_type, bytes_per_pixel, source, prev, dest);
     }
 
-    fn unfilter_row(filter_type: u8, bytes_per_pixel: usize, src: &[u8], prev: Option<&[u8]>, dst: &mut [u8]){
-        let prev = prev.unwrap_or(&vec![0u8; src.len()]);
+    fn unfilter_row(filter_type: u8, bytes_per_pixel: usize, src: &[u8], prev: Option<Vec<u8>>, dst: &mut [u8]){
+        let prev = prev.unwrap_or(vec![0u8; src.len()]);
 
         match filter_type {
             0 => { // None
@@ -187,6 +190,15 @@ fn main() -> anyhow::Result<()> {
                     let left = if i >= bytes_per_pixel { dst[i - bytes_per_pixel] } else { 0 };
                     dst[i] = src[i].wrapping_add(left);
                 }
+            },
+            2 => { // Up
+
+            },
+            3 => { // Avg
+
+            },
+            4 => { // Paeth
+
             }
             _ => {
                 panic!("Unsupported filter type: {}", filter_type);
