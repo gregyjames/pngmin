@@ -61,6 +61,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "byteorder",
+ "crc32fast",
  "flate2",
 ]
 
