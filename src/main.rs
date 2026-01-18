@@ -1,7 +1,6 @@
 use std::io::Read;
 use anyhow::bail;
 use std::io::Cursor;
-use std::simd::u8x1;
 use byteorder::{BigEndian, ReadBytesExt};
 use flate2::read::ZlibDecoder;
 
@@ -228,7 +227,13 @@ fn main() -> anyhow::Result<()> {
                 }
             },
             4 => { // Paeth
-
+                for i in 0..src.len() {
+                    let top = prev[i];
+                    let left = if i >= bytes_per_pixel { dst[i - bytes_per_pixel] } else { 0 };
+                    let top_left = if i >= bytes_per_pixel { prev[i - bytes_per_pixel] } else { 0 };
+                    let p = paeth_predictor(left, top, top_left);
+                    dst[i] = src[i].wrapping_add(p);
+                }
             }
             _ => {
                 panic!("Unsupported filter type: {}", filter_type);
