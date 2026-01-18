@@ -176,7 +176,16 @@ fn main() -> anyhow::Result<()> {
     }
 
     fn unfilter_row(filter_type: u8, bytes_per_pixel: usize, src: &[u8], prev: Option<&[u8]>, dst: &mut [u8]){
+        let prev = prev.unwrap_or(&vec![0u8; src.len()]);
 
+        match filter_type {
+            0 => { // None
+                dst.copy_from_slice(src);
+            },
+            _ => {
+                panic!("Unsupported filter type: {}", filter_type);
+            }
+        }
     }
     Ok(())
 }
