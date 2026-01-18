@@ -130,8 +130,53 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    let info = info.ok_or("Missing IHDR image info.");
+    let info = info.ok_or("Missing IHDR image info.").unwrap();
     println!("{:?}", info);
 
+    let mut decoder = ZlibDecoder::new(&idat_data[..]);
+    let mut raw: Vec<u8> = Vec::new();
+    decoder.read_to_end(&mut raw).map_err(|e| e.to_string()).unwrap();
+
+    // Truecolor with alpha: red, green, blue, alpha.
+    // Truecolor: red, green, blue
+
+    let bytes_per_pixel = match info.image_type {
+        ImageType::TruecolorAlpha => 4, // RGBA
+        ImageType::Truecolor => 3,      // RGB
+        _ => panic!("Unsupported color type")
+    };
+
+    let width = info.width as usize;
+    let height = info.height as usize;
+    let row_bytes = width * bytes_per_pixel;
+    let expected = height * (1 +row_bytes); // 7.3 there is one filter byte per row
+
+    if raw.len() != expected {
+        bail!("Decompressed image data doesn't match expected image data.");
+    }
+
+    let mut unfiltered = vec![0u8; height * row_bytes];
+
+    for row in 0..height {
+        let start = row * (1 +row_bytes);
+        let filter_type = raw[start];
+        let source = &raw[start + 1 .. start + 1 + row_bytes];
+
+        let dest_row_start = row * row_bytes;
+        let dest = &mut unfiltered[dest_row_start..dest_row_start + row_bytes];
+        //println!("{:?}", filter_type);
+
+        let prev = if row == 0 {
+            None
+        } else {
+            Some(&unfiltered[(row - 1) * row_bytes .. row * row_bytes])
+        };
+
+        unfilter_row(filter_type, bytes_per_pixel, source, prev, dest);
+    }
+
+    fn unfilter_row(filter_type: u8, bytes_per_pixel: usize, src: &[u8], prev: Option<&[u8]>, dst: &mut [u8]){
+
+    }
     Ok(())
 }
