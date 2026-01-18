@@ -192,10 +192,14 @@ fn main() -> anyhow::Result<()> {
                 }
             },
             2 => { // Up
-
+                // Recon(x) = Filt(x) + Recon(b)
+                for i in 0..src.len() {
+                    dst[i] = src[i].wrapping_add(prev[i]);
+                }
             },
             3 => { // Avg
-
+                // Recon(x) = Filt(x) + floor((Recon(a) + Recon(b)) / 2)
+                
             },
             4 => { // Paeth
 
