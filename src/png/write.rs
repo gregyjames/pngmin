@@ -9,7 +9,7 @@ use zopfli::{compress, Format, Options};
 
 use crate::png::types::*;
 use crate::png::constants::*;
-use crate::png::optimization::{choose_best_filter, optimize_alpha_channel};
+use crate::png::optimization::{choose_best_filter, optimize_alpha_channel, quantize_colors};
 
 impl DecodedPng {
     pub fn save(&self, path: &str) -> Result<()> {
@@ -20,7 +20,19 @@ impl DecodedPng {
         let width = self.info.width as usize;
         let height = self.info.height as usize;
 
-        let optimized_rgba = optimize_alpha_channel(&self.rgba);
+        let quantized_rgba = match compression_level {
+            CompressionLevel::Lossless => {
+                &self.rgba[..]
+            },
+            CompressionLevel::Balanced => {
+                &quantize_colors(&self.rgba, 8)
+            },
+            CompressionLevel::Maximum => {
+                &quantize_colors(&self.rgba, 4)
+            }
+        };
+
+        let optimized_rgba = optimize_alpha_channel(quantized_rgba);
 
         let has_alpha = optimized_rgba.chunks_exact(4).any(|pixel| pixel[3] != 255);
 
