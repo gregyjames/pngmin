@@ -1,6 +1,7 @@
 use std::io::Read;
 use anyhow::bail;
 use std::io::Cursor;
+use byteorder::{BigEndian, ReadBytesExt};
 
 enum CompressionLevel {
     Low,
@@ -25,6 +26,15 @@ fn main() -> anyhow::Result<()> {
 
     if signature != PNG_SIG {
         bail!("Signature doesn't match PNG signature");
+    }
+
+    loop {
+        let length = match cursor.read_u32::<BigEndian>() {
+            Ok(length) => length as usize,
+            Err(_) => break,
+        };
+
+        //println!("length: {}", length);
     }
 
     Ok(())
