@@ -30,11 +30,18 @@ pub struct PngInfo {
     pub image_type: ImageType
 }
 
+#[derive(Debug)]
 pub struct Pixel{
     Red: u8,
     Green: u8,
     Blue: u8,
     Alpha: u8,
+}
+
+#[derive(Debug)]
+pub struct DecodedPng {
+    pub info: PngInfo,
+    pub rgba: Vec<Pixel>,
 }
 
 // https://www.w3.org/TR/png-3/#4Concepts.Encoding
@@ -138,7 +145,7 @@ fn main() -> anyhow::Result<()> {
     }
 
     let info = info.ok_or("Missing IHDR image info.").unwrap();
-    println!("{:?}", info);
+    //println!("{:?}", info);
 
     let mut decoder = ZlibDecoder::new(&idat_data[..]);
     let mut raw: Vec<u8> = Vec::new();
@@ -217,6 +224,14 @@ fn main() -> anyhow::Result<()> {
         },
         _ => unreachable!()
     }
+
+    let image = DecodedPng{
+        info,
+        rgba: pixels,
+    };
+
+    //println!("image: {:?}", image);
+
     Ok(())
 }
 
