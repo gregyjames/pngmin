@@ -11,6 +11,10 @@ use crate::png::filter::apply_filter;
 
 impl DecodedPng {
     pub fn save(&self, path: &str) -> Result<()> {
+        self.save_optimized(path, CompressionLevel::Balanced)
+    }
+    
+    pub fn save_optimized(&self, path: &str, compression_level: CompressionLevel) -> Result<()> {
         let width = self.info.width as usize;
         let height = self.info.height as usize;
 

@@ -8,6 +8,12 @@ pub enum ImageType {
     Unknown,
 }
 
+pub enum CompressionLevel{
+    Lossless,
+    Balanced,
+    Maximum
+}
+
 #[derive(Debug)]
 pub struct PngInfo {
     pub width: u32,
