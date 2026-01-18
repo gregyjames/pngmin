@@ -35,6 +35,12 @@ fn main() -> anyhow::Result<()> {
         };
 
         //println!("length: {}", length);
+
+        let mut chunk_type = vec![0u8; 4];
+        cursor.read_exact(&mut chunk_type).map_err(|e| e.to_string()).unwrap();
+        let chunk_type_str = std::str::from_utf8(&chunk_type).map_err(|e| "Bad chunk type").unwrap().to_string();
+
+        println!("Chunk type: {}", chunk_type_str);
     }
 
     Ok(())
