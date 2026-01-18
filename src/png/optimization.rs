@@ -39,3 +39,27 @@ pub fn choose_best_filter(row: &[u8], prev: Option<&[u8]>, bytes_per_pixel: usiz
 
     (best_filter, best_bytes)
 }
+
+// https://en.wikipedia.org/wiki/Color_depth
+// https://www.geeksforgeeks.org/electronics-engineering/difference-between-uniform-and-non-uniform-quantization/
+pub fn quantize_colors(rgba: &[u8], bits: u8) -> Vec<u8> {
+    let levels = 1u8 << bits; // 2^bits
+    let step = 255 / levels;
+    let max_val = ((levels - 1) * step) as u8;
+
+    rgba.chunks_exact(4).map(|pixel| {
+        [
+            quantize_channel(pixel[0], step, max_val),
+            quantize_channel(pixel[1], step, max_val),
+            quantize_channel(pixel[2], step, max_val),
+            pixel[3], // Don't quantize alpha
+        ]
+    }).flatten().collect()
+}
+
+#[inline]
+fn quantize_channel(value: u8, step: u8, max_val: u8) -> u8 {
+    let bin_index = value / step;
+    let quantized = bin_index * step;
+    quantized.min(max_val)
+}

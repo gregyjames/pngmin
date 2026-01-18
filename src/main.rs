@@ -10,7 +10,7 @@ fn main() -> anyhow::Result<()> {
     println!("Reading PNG took: {:#?}", elapsed);
 
     let start_time = Instant::now();
-    image.save_optimized("file.png", CompressionLevel::Maximum);
+    image.save_optimized("file.png", CompressionLevel::Maximum)?;
     let elapsed = start_time.elapsed();
     println!("Saving PNG Took: {:?}", elapsed);
 
