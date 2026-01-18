@@ -1,17 +1,18 @@
 [![Rust](https://github.com/gregyjames/pngmin/actions/workflows/rust.yml/badge.svg)](https://github.com/gregyjames/pngmin/actions/workflows/rust.yml)
+![GitHub repo size](https://img.shields.io/github/repo-size/gregyjames/pngmin)
 
 # pngmin
-PNG Parser
+PNG Parser and Compressor
 
-# Rambling
+## Rambling
 I don't know why I am making this. I got super ADHD today and decided to understand how PNG works so I read through the spec and put this together. Eventually, I want to use this to compress PNGs so I can stop using TinyPNG but that is a bit away, going to look at what magic OxiPNG is doing. Currently just support parsing (reading) and writing PNG files. Overall, this has been pretty fun actually learning more about one of the super common file formats we interact with on the web daily.
 
-# Current Limiations
+## Current Limiations
 - Only RGB/RGBA Support
 - No iterlaced image Support
 - 8bit support only
 
-# License
+## License
 MIT License
 
 Copyright (c) 2026 Greg James
