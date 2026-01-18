@@ -1,12 +1,12 @@
 use std::io::Write;
 use anyhow::{Context, Result};
 use byteorder::{BigEndian, WriteBytesExt};
+use crc32fast::Hasher;
 use flate2::write::ZlibEncoder;
 use flate2::Compression;
 
 use crate::png::types::*;
 use crate::png::constants::*;
-use crate::png::chunk::write_chunk;
 use crate::png::filter::apply_filter;
 
 impl DecodedPng {
@@ -86,4 +86,18 @@ impl DecodedPng {
 
         Ok(())
     }
+}
+
+pub fn write_chunk(writer: &mut impl Write, chunk_type: &[u8; 4], data: &[u8]) -> Result<()> {
+    let mut hasher = Hasher::new();
+    hasher.update(chunk_type);
+    hasher.update(data);
+    let crc = hasher.finalize();
+
+    writer.write_u32::<BigEndian>(data.len() as u32)?;
+    writer.write_all(chunk_type)?;
+    writer.write_all(data)?;
+    writer.write_u32::<BigEndian>(crc)?;
+
+    Ok(())
 }

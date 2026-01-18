@@ -5,9 +5,8 @@ use flate2::read::ZlibDecoder;
 
 use crate::png::types::*;
 use crate::png::constants::*;
-use crate::png::chunk::parse_image_type;
 use crate::png::filter::unfilter_row;
-
+use crate::png::parse_image_type;
 
 impl DecodedPng {
     pub fn get(&self, x: u32, y: u32) -> Pixel {
@@ -25,7 +24,7 @@ impl DecodedPng {
             alpha: self.rgba[base + 3],
         }
     }
-    pub fn read_from_file(path: &str) -> anyhow::Result<DecodedPng> {
+    pub fn read_from_file(path: &str) -> Result<DecodedPng> {
         let mut file = std::fs::File::open(path).with_context(|| format!("Could not open file {}", path))?;
 
         let mut bytes: Vec<u8> = Vec::new();
