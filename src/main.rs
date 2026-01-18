@@ -1,5 +1,5 @@
 use std::io::Read;
-use anyhow::bail;
+use anyhow::{bail, Context};
 use std::io::Cursor;
 use byteorder::{BigEndian, ReadBytesExt};
 use flate2::read::ZlibDecoder;
@@ -12,12 +12,6 @@ pub enum ImageType{
     GrayscaleAlpha,
     TruecolorAlpha,
     Unknown
-}
-
-enum CompressionLevel {
-    Low,
-    Medium,
-    High,
 }
 
 #[derive(Debug)]
@@ -41,18 +35,16 @@ pub struct Pixel{
 #[derive(Debug)]
 pub struct DecodedPng {
     pub info: PngInfo,
-    pub pixels: Vec<Pixel>,
+    pub rgba: Vec<u8>,
+    //pixels: Vec<Pixel>,
 }
 
 impl DecodedPng {
     pub fn read_from_file(path: &str) -> anyhow::Result<DecodedPng> {
-        let mut file = match std::fs::File::open(path) {
-            Ok(file) => file,
-            Err(e) => panic!("Failed to open file: {}", e),
-        };
+        let mut file = std::fs::File::open(path).with_context(|| format!("Could not open file {}", path))?;
 
         let mut bytes: Vec<u8> = Vec::new();
-        file.read_to_end(&mut bytes).unwrap();
+        file.read_to_end(&mut bytes).with_context(|| format!("Could not read file {}", path))?;
 
         let mut cursor = Cursor::new(bytes);
         let mut signature: [u8; 8] = [0u8; 8];
@@ -74,28 +66,28 @@ impl DecodedPng {
             //println!("length: {}", length);
 
             let mut chunk_type: Vec<u8> = vec![0u8; 4];
-            cursor.read_exact(&mut chunk_type).map_err(|e| e.to_string()).unwrap();
+            cursor.read_exact(&mut chunk_type).with_context(|| "Could not read chunk type")?;
             //let chunk_type_str = std::str::from_utf8(&chunk_type).map_err(|e| "Bad chunk type").unwrap().to_string();
 
             //println!("Chunk type: {}", chunk_type_str);
 
             let mut data = vec![0u8; length];
-            cursor.read_exact(&mut data).map_err(|e| e.to_string()).unwrap();
+            cursor.read_exact(&mut data).with_context(|| "Could not read data")?;
 
-            let _crc = cursor.read_u32::<BigEndian>().map_err(|e| e.to_string()).unwrap();
+            let _crc = cursor.read_u32::<BigEndian>().with_context(|| "Could not read CRC")?;
 
             if chunk_type == IHDR{
                 if length != 13{
                     bail!("Length doesn't match 13 chunk length");
                 }
                 let mut data_cursor = Cursor::new(data);
-                let width = data_cursor.read_u32::<BigEndian>().map_err(|e| e.to_string()).unwrap();
-                let height = data_cursor.read_u32::<BigEndian>().map_err(|e| e.to_string()).unwrap();
-                let bit_depth = data_cursor.read_u8().map_err(|e| e.to_string()).unwrap();
-                let color_type = data_cursor.read_u8().map_err(|e| e.to_string()).unwrap();
-                let compression = data_cursor.read_u8().map_err(|e| e.to_string()).unwrap();
-                let filter = data_cursor.read_u8().map_err(|e| e.to_string()).unwrap();
-                let interlace = data_cursor.read_u8().map_err(|e| e.to_string()).unwrap();
+                let width = data_cursor.read_u32::<BigEndian>().with_context(|| "Could not read width")?;
+                let height = data_cursor.read_u32::<BigEndian>().with_context(|| "Could not read height")?;
+                let bit_depth = data_cursor.read_u8().with_context(|| "Could not read bit_depth")?;
+                let color_type = data_cursor.read_u8().with_context(|| "Could not read color type")?;
+                let compression = data_cursor.read_u8().with_context(|| "Could not read compression")?;
+                let filter = data_cursor.read_u8().with_context(|| "Could not read filter type")?;
+                let interlace = data_cursor.read_u8().with_context(|| "Could not read interlace")?;
 
                 if compression != 0 && filter != 0 {
                     bail!("Unsupported compression format for image data.");
@@ -134,7 +126,7 @@ impl DecodedPng {
 
         let mut decoder = ZlibDecoder::new(&idat_data[..]);
         let mut raw: Vec<u8> = Vec::new();
-        decoder.read_to_end(&mut raw).map_err(|e| e.to_string()).unwrap();
+        decoder.read_to_end(&mut raw).with_context(|| "Could not read file")?;
 
         // Truecolor with alpha: red, green, blue, alpha.
         // Truecolor: red, green, blue
@@ -177,49 +169,45 @@ impl DecodedPng {
             unfilter_row(filter_type, bytes_per_pixel, source, prev, dest);
         }
 
-        let mut pixels: Vec<Pixel> = Vec::with_capacity(width * height);
+        //let mut pixels: Vec<Pixel> = Vec::with_capacity(width * height);
 
+        let mut rgba = Vec::with_capacity(width * height * 4);
         match info.image_type {
             ImageType::Truecolor => {
                 for i in 0..(width * height) {
                     let r = unfiltered[i * 3];
                     let g = unfiltered[i * 3 + 1];
                     let b = unfiltered[i * 3 + 2];
-                    pixels.push(Pixel {
-                        red: r,
-                        green: g,
-                        blue: b,
-                        alpha: 255,
-                    });
+                    rgba.extend_from_slice(&[r, g, b, 255]);
                 }
             },
             ImageType::TruecolorAlpha => {
-                for i in 0..(width * height) {
-                    let r = unfiltered[i * 4];
-                    let g = unfiltered[i * 4 + 1];
-                    let b = unfiltered[i * 4 + 2];
-                    let a = unfiltered[i * 4 + 3];
-                    pixels.push(Pixel {
-                        red: r,
-                        green: g,
-                        blue: b,
-                        alpha: a,
-                    });
-                }
+                rgba = unfiltered;
             },
             _ => unreachable!()
         }
 
         let image = DecodedPng{
             info,
-            pixels,
+            rgba,
         };
 
         Ok(image)
     }
     pub fn get(&self, x: u32, y: u32) -> Pixel {
         let w = self.info.width as usize;
-        self.pixels[y as usize * w + x as usize]
+        let x = x as usize;
+        let y = y as usize;
+
+        let i = y * w + x;
+        let base = i + 4;
+
+        Pixel {
+            red: self.rgba[base],
+            green: self.rgba[base + 1],
+            blue: self.rgba[base + 2],
+            alpha: self.rgba[base + 3],
+        }
     }
 }
 
@@ -241,7 +229,7 @@ fn parse_image_type(color_type: u8, bit_depth: u8) -> ImageType {
 }
 fn main() -> anyhow::Result<()> {
     let image = DecodedPng::read_from_file("SailFlow.png");
-    //println!("image: {:?}", image);
+    println!("image: {:?}", image);
 
     Ok(())
 }
