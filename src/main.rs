@@ -182,6 +182,12 @@ fn main() -> anyhow::Result<()> {
             0 => { // None
                 dst.copy_from_slice(src);
             },
+            1 => { // Sub
+                for i in 0..src.len() {
+                    let left = if i >= bytes_per_pixel { dst[i - bytes_per_pixel] } else { 0 };
+                    dst[i] = src[i].wrapping_add(left);
+                }
+            }
             _ => {
                 panic!("Unsupported filter type: {}", filter_type);
             }
