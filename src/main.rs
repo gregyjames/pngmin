@@ -41,6 +41,23 @@ fn main() -> anyhow::Result<()> {
         let chunk_type_str = std::str::from_utf8(&chunk_type).map_err(|e| "Bad chunk type").unwrap().to_string();
 
         println!("Chunk type: {}", chunk_type_str);
+
+        let _crc = cursor.read_u32::<BigEndian>().map_err(|e| e.to_string()).unwrap();
+
+        match chunk_type_str.as_str() {
+            "IHDR" => {
+                if length != 13{
+                    bail!("Length doesn't match 13 chunk length");
+                }
+            },
+            "IDAT" => {
+
+            },
+            "IEND" => break,
+            _ => {
+                // Ignore
+            }
+        }
     }
 
     Ok(())
