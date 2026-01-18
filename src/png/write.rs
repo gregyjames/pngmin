@@ -1,13 +1,14 @@
 use std::io::Write;
+use std::num::NonZeroU64;
 use anyhow::{Context, Result};
 use byteorder::{BigEndian, WriteBytesExt};
 use crc32fast::Hasher;
-use flate2::write::ZlibEncoder;
 use flate2::Compression;
+use flate2::write::ZlibEncoder;
+use zopfli::{compress, Format, Options};
 
 use crate::png::types::*;
 use crate::png::constants::*;
-use crate::png::filter::apply_filter;
 use crate::png::optimization::{choose_best_filter, optimize_alpha_channel};
 
 impl DecodedPng {
@@ -65,9 +66,23 @@ impl DecodedPng {
             filtered.extend_from_slice(&filtered_row);
         }
 
-        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::best());
-        encoder.write_all(&filtered)?;
-        let compressed = encoder.finish()?;
+        let mut compressed = Vec::new();
+
+        match compression_level {
+            CompressionLevel::Lossless | CompressionLevel::Balanced => {
+                let mut encoder = ZlibEncoder::new(Vec::new(), Compression::best());
+                encoder.write_all(&filtered)?;
+                compressed = encoder.finish()?;
+            }
+            CompressionLevel::Maximum => {
+                let options = Options{
+                    iteration_count: NonZeroU64::new(100).unwrap(),
+                    iterations_without_improvement: NonZeroU64::new(u64::MAX).unwrap(),
+                    maximum_block_splits: 0
+                };
+                compress(options, Format::Zlib, &filtered[..], &mut compressed)?;
+            }
+        }
 
         let mut file = std::fs::File::create(path).with_context(|| format!("Could not create file {}", path))?;
 
