@@ -3,6 +3,8 @@ pub mod constants;
 pub mod read;
 pub mod write;
 pub mod filter;
+pub mod optimization;
+
 pub use types::*;
 
 pub fn parse_image_type(color_type: u8, bit_depth: u8) -> ImageType {

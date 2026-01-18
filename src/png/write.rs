@@ -8,17 +8,21 @@ use flate2::Compression;
 use crate::png::types::*;
 use crate::png::constants::*;
 use crate::png::filter::apply_filter;
+use crate::png::optimization::optimize_alpha_channel;
 
 impl DecodedPng {
     pub fn save(&self, path: &str) -> Result<()> {
         self.save_optimized(path, CompressionLevel::Balanced)
     }
-    
+
     pub fn save_optimized(&self, path: &str, compression_level: CompressionLevel) -> Result<()> {
         let width = self.info.width as usize;
         let height = self.info.height as usize;
 
-        let has_alpha = self.rgba.chunks_exact(4).any(|pixel| pixel[3] != 255);
+        let optimized_rgba = optimize_alpha_channel(&self.rgba);
+
+        let has_alpha = optimized_rgba.chunks_exact(4).any(|pixel| pixel[3] != 255);
+
         let (color_type, bytes_per_pixel) = if has_alpha {
             (6u8, 4usize) // RGBA
         } else {
@@ -31,11 +35,11 @@ impl DecodedPng {
         for y in 0..height {
             for x in 0..width {
                 let idx = (y * width + x) * 4;
-                image_data.push(self.rgba[idx]);     // R
-                image_data.push(self.rgba[idx + 1]); // G
-                image_data.push(self.rgba[idx + 2]); // B
+                image_data.push(optimized_rgba[idx]);     // R
+                image_data.push(optimized_rgba[idx + 1]); // G
+                image_data.push(optimized_rgba[idx + 2]); // B
                 if bytes_per_pixel == 4 {
-                    image_data.push(self.rgba[idx + 3]); // A
+                    image_data.push(optimized_rgba[idx + 3]); // A
                 }
             }
         }
