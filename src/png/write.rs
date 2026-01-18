@@ -25,7 +25,7 @@ impl DecodedPng {
                 &self.rgba[..]
             },
             CompressionLevel::Balanced => {
-                &quantize_colors(&self.rgba, 8)
+                &quantize_colors(&self.rgba, 6)
             },
             CompressionLevel::Maximum => {
                 &quantize_colors(&self.rgba, 4)
