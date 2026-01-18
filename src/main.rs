@@ -2,6 +2,7 @@ use std::io::Read;
 use anyhow::bail;
 use std::io::Cursor;
 use byteorder::{BigEndian, ReadBytesExt};
+use flate2::read::ZlibDecoder;
 
 #[derive(Debug)]
 enum ImageType{
@@ -63,6 +64,7 @@ fn main() -> anyhow::Result<()> {
     }
 
     let mut info: Option<PngInfo> = None;
+    let mut idat_data: Vec<u8> = Vec::new();
 
     loop {
         let length = match cursor.read_u32::<BigEndian>() {
@@ -96,6 +98,18 @@ fn main() -> anyhow::Result<()> {
             let filter = data_cursor.read_u8().map_err(|e| e.to_string()).unwrap();
             let interlace = data_cursor.read_u8().map_err(|e| e.to_string()).unwrap();
 
+            if compression != 0 && filter != 0 {
+                bail!("Unsupported compression format for image data.");
+            }
+            if interlace != 0 {
+                bail!("Interlaced PNG not supported in this minimal decoder");
+            }
+            if bit_depth != 8 {
+                bail!("Only 8-bit PNG supported in this minimal decoder");
+            }
+            if color_type != 2 && color_type != 6 {
+                bail!("Only color types 2 (RGB) and 6 (RGBA) supported");
+            }
             info = Some(PngInfo{
                 width,
                 height,
@@ -106,7 +120,7 @@ fn main() -> anyhow::Result<()> {
             })
         }
         else if chunk_type == IDAT{
-
+            idat_data.extend(&data[..]);
         }
         else if chunk_type == IEND{
             break;
@@ -116,6 +130,7 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
+    let info = info.ok_or("Missing IHDR image info.");
     println!("{:?}", info);
 
     Ok(())
