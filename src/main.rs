@@ -3,17 +3,48 @@ use anyhow::bail;
 use std::io::Cursor;
 use byteorder::{BigEndian, ReadBytesExt};
 
+#[derive(Debug)]
+enum ImageType{
+    Grayscale,
+    Truecolor,
+    IndexedColor,
+    GrayscaleAlpha,
+    TruecolorAlpha,
+    Unknown
+}
+
 enum CompressionLevel {
     Low,
     Medium,
     High,
 }
+
+#[derive(Debug)]
+pub struct PngInfo {
+    pub width: u32,
+    pub height: u32,
+    pub bit_depth: u8,
+    pub color_type: u8,
+    pub interlace: u8,
+    pub image_type: ImageType
+}
+
 // https://www.w3.org/TR/png-3/#4Concepts.Encoding
 const PNG_SIG: [u8; 8] = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 const IHDR: [u8; 4] = [0x49, 0x48, 0x44, 0x52];
 const IDAT: [u8; 4] = [0x49, 0x44, 0x41, 0x54];
 const IEND: [u8; 4] = [0x49, 0x45, 0x4e, 0x44];
 
+fn parse_image_type(color_type: u8, bit_depth: u8) -> ImageType {
+    match (color_type, bit_depth) {
+        (0, 1 | 2 | 4 | 8 | 16) => ImageType::Grayscale,
+        (2, 8 | 16) => ImageType::Truecolor,
+        (3, 1 | 2 | 4 | 8 ) => ImageType::IndexedColor,
+        (4, 8 | 16) => ImageType::GrayscaleAlpha,
+        (6, 8 | 16) => ImageType::TruecolorAlpha,
+        _ => ImageType::Unknown
+    }
+}
 fn main() -> anyhow::Result<()> {
     let mut file = match std::fs::File::open("SailFlow.png") {
         Ok(file) => file,
@@ -30,6 +61,8 @@ fn main() -> anyhow::Result<()> {
     if signature != PNG_SIG {
         bail!("Signature doesn't match PNG signature");
     }
+
+    let mut info: Option<PngInfo> = None;
 
     loop {
         let length = match cursor.read_u32::<BigEndian>() {
@@ -62,7 +95,15 @@ fn main() -> anyhow::Result<()> {
             let compression = data_cursor.read_u8().map_err(|e| e.to_string()).unwrap();
             let filter = data_cursor.read_u8().map_err(|e| e.to_string()).unwrap();
             let interlace = data_cursor.read_u8().map_err(|e| e.to_string()).unwrap();
-            println!("{}x{} {} bit {}, compression: {}, filter: {}, interlact: {}", width, height, bit_depth, color_type, compression, filter, interlace);
+
+            info = Some(PngInfo{
+                width,
+                height,
+                bit_depth,
+                color_type,
+                interlace,
+                image_type: parse_image_type(color_type, bit_depth)
+            })
         }
         else if chunk_type == IDAT{
 
@@ -74,6 +115,8 @@ fn main() -> anyhow::Result<()> {
             // ignore
         }
     }
+
+    println!("{:?}", info);
 
     Ok(())
 }
