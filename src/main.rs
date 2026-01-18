@@ -5,7 +5,7 @@ use byteorder::{BigEndian, ReadBytesExt};
 use flate2::read::ZlibDecoder;
 
 #[derive(Debug)]
-enum ImageType{
+pub enum ImageType{
     Grayscale,
     Truecolor,
     IndexedColor,
@@ -30,18 +30,25 @@ pub struct PngInfo {
     pub image_type: ImageType
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct Pixel{
-    Red: u8,
-    Green: u8,
-    Blue: u8,
-    Alpha: u8,
+    red: u8,
+    green: u8,
+    blue: u8,
+    alpha: u8,
 }
 
 #[derive(Debug)]
 pub struct DecodedPng {
     pub info: PngInfo,
-    pub rgba: Vec<Pixel>,
+    pub pixels: Vec<Pixel>,
+}
+
+impl DecodedPng {
+    pub fn get(&self, x: u32, y: u32) -> Pixel {
+        let w = self.info.width as usize;
+        self.pixels[y as usize * w + x as usize]
+    }
 }
 
 // https://www.w3.org/TR/png-3/#4Concepts.Encoding
@@ -201,10 +208,10 @@ fn main() -> anyhow::Result<()> {
                 let g = unfiltered[i * 3 + 1];
                 let b = unfiltered[i * 3 + 2];
                 pixels.push(Pixel {
-                    Red: r,
-                    Green: g,
-                    Blue: b,
-                    Alpha: 255,
+                    red: r,
+                    green: g,
+                    blue: b,
+                    alpha: 255,
                 });
             }
         },
@@ -215,10 +222,10 @@ fn main() -> anyhow::Result<()> {
                 let b = unfiltered[i * 4 + 2];
                 let a = unfiltered[i * 4 + 3];
                 pixels.push(Pixel {
-                    Red: r,
-                    Green: g,
-                    Blue: b,
-                    Alpha: a,
+                    red: r,
+                    green: g,
+                    blue: b,
+                    alpha: a,
                 });
             }
         },
@@ -227,7 +234,7 @@ fn main() -> anyhow::Result<()> {
 
     let image = DecodedPng{
         info,
-        rgba: pixels,
+        pixels,
     };
 
     //println!("image: {:?}", image);
