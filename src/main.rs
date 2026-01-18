@@ -42,6 +42,9 @@ fn main() -> anyhow::Result<()> {
 
         println!("Chunk type: {}", chunk_type_str);
 
+        let mut data = vec![0u8; length];
+        cursor.read_exact(&mut data).map_err(|e| e.to_string()).unwrap();
+
         let _crc = cursor.read_u32::<BigEndian>().map_err(|e| e.to_string()).unwrap();
 
         match chunk_type_str.as_str() {
@@ -49,6 +52,15 @@ fn main() -> anyhow::Result<()> {
                 if length != 13{
                     bail!("Length doesn't match 13 chunk length");
                 }
+                let mut data_cursor = Cursor::new(data);
+                let width = data_cursor.read_u32::<BigEndian>().map_err(|e| e.to_string()).unwrap();
+                let height = data_cursor.read_u32::<BigEndian>().map_err(|e| e.to_string()).unwrap();
+                let bit_depth = data_cursor.read_u8().map_err(|e| e.to_string()).unwrap();
+                let color_type = data_cursor.read_u8().map_err(|e| e.to_string()).unwrap();
+                let compression = data_cursor.read_u8().map_err(|e| e.to_string()).unwrap();
+                let filter = data_cursor.read_u8().map_err(|e| e.to_string()).unwrap();
+                let interlace = data_cursor.read_u8().map_err(|e| e.to_string()).unwrap();
+                println!("{}x{} {} bit {}, compression: {}, filter: {}, interlact: {}", width, height, bit_depth, color_type, compression, filter, interlace);
             },
             "IDAT" => {
 
