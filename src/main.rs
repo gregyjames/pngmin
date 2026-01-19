@@ -1,4 +1,5 @@
 use std::io::Write;
+use std::path::{Path, PathBuf};
 use crate::png::{CompressionLevel, DecodedPng};
 use std::time::Instant;
 use anyhow::bail;
@@ -12,7 +13,10 @@ mod png;
 struct Args {
     #[arg(short = 'i', long = "input")]
     input_file: Option<String>,
-    
+
+    #[arg(long = "dir")]
+    directory: Option<String>,
+
     #[arg(short = 'k', long = "key")]
     key_path: Option<String>,
     
@@ -30,6 +34,9 @@ struct Args {
 
     #[arg(short = 'o', required = false)]
     outfile: Option<String>,
+
+    #[arg(long = "out-dir")]
+    out_dir: Option<String>,
 }
 
 pub fn derive_key_from_password(password: &str, salt: Option<&[u8; 16]>) -> ([u8; 32], [u8; 16]) {
@@ -58,6 +65,90 @@ fn load_key(key_path: &str) -> anyhow::Result<[u8; 32]> {
     Ok(key_array)
 }
 
+fn get_png_files(dir: &str) -> anyhow::Result<Vec<PathBuf>> {
+    let dir_path = Path::new(dir);
+    if !dir_path.is_dir() {
+        anyhow::bail!("Path is not a directory: {}", dir);
+    }
+
+    let mut png_files = Vec::new();
+    for entry in std::fs::read_dir(dir_path)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_file() {
+            if let Some(ext) = path.extension() {
+                if ext.to_string_lossy().to_lowercase() == "png" {
+                    png_files.push(path);
+                }
+            }
+        }
+    }
+    Ok(png_files)
+}
+
+fn get_output_path(input_path: &str, out_dir: Option<&str>, suffix: &str) -> String {
+    let input_path = Path::new(input_path);
+    let file_name = input_path.file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("output.png");
+
+    let base_name = file_name.trim_end_matches(".png");
+    let new_name = format!("{}{}.png", base_name, suffix);
+
+    if let Some(out_dir) = out_dir {
+        Path::new(out_dir).join(&new_name).to_string_lossy().to_string()
+    } else {
+        input_path.parent()
+            .map(|p| p.join(&new_name))
+            .unwrap_or_else(|| PathBuf::from(&new_name))
+            .to_string_lossy()
+            .to_string()
+    }
+}
+
+
+fn process_file_encrypt(input_file: &str, output_file: Option<String>, out_dir: Option<&str>, key: &[u8; 32], compression_level: CompressionLevel) -> anyhow::Result<()> {
+    let start_time = Instant::now();
+    let image = DecodedPng::read_from_file(input_file, None)?;
+    let elapsed = start_time.elapsed();
+    println!("Reading {} took: {:?}", input_file, elapsed);
+
+    let output = output_file.unwrap_or_else(|| {
+        get_output_path(input_file, out_dir, "_encrypted")
+    });
+
+    if let Some(out_dir) = out_dir {
+        std::fs::create_dir_all(out_dir)?;
+    }
+
+    let start_time = Instant::now();
+    image.save_optimized(&output, compression_level, Some(key))?;
+    let elapsed = start_time.elapsed();
+    println!("Encrypted {} -> {} (took: {:?})", input_file, output, elapsed);
+    Ok(())
+}
+
+fn process_file_decrypt(input_file: &str, output_file: Option<String>, out_dir: Option<&str>, key: &[u8; 32]) -> anyhow::Result<()> {
+    let start_time = Instant::now();
+    let image = DecodedPng::read_from_file(input_file, Some(key))?;
+    let elapsed = start_time.elapsed();
+    println!("Reading {} took: {:?}", input_file, elapsed);
+
+    let output = output_file.unwrap_or_else(|| {
+        get_output_path(input_file, out_dir, "_decrypted")
+    });
+
+    if let Some(out_dir) = out_dir {
+        std::fs::create_dir_all(out_dir)?;
+    }
+
+    let start_time = Instant::now();
+    image.save_optimized(&output, CompressionLevel::Lossless, None)?;
+    let elapsed = start_time.elapsed();
+    println!("Decrypted {} -> {} (took: {:?})", input_file, output, elapsed);
+    Ok(())
+}
+
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
@@ -69,6 +160,50 @@ fn main() -> anyhow::Result<()> {
         println!("Key generated and saved to: {}", key_path);
         println!("Salt: {:?}", salt);
         return Ok(());
+    }
+
+    if let Some(dir) = args.directory {
+        let key = if let Some(key_path) = args.key_path {
+            load_key(&key_path)?
+        } else {
+            bail!("Key path (-k) required when processing directory");
+        };
+
+        let png_files = get_png_files(&dir)?;
+        if png_files.is_empty() {
+            println!("No PNG files found in directory: {}", dir);
+            return Ok(());
+        }
+
+        println!("Found {} PNG file(s) in directory: {}", png_files.len(), dir);
+
+        // Create output directory if specified
+        if let Some(ref out_dir) = args.out_dir {
+            std::fs::create_dir_all(out_dir)?;
+            println!("Output directory: {}", out_dir);
+        }
+
+        if args.encrypt {
+            for file_path in &png_files {
+                let input_file = file_path.to_string_lossy();
+                if let Err(e) = process_file_encrypt(&input_file, None, args.out_dir.as_deref(), &key, args.compression_level.clone()) {
+                    eprintln!("Error encrypting {}: {}", input_file, e);
+                }
+            }
+            return Ok(());
+        }
+
+        if args.decrypt {
+            for file_path in &png_files {
+                let input_file = file_path.to_string_lossy();
+                if let Err(e) = process_file_decrypt(&input_file, None, args.out_dir.as_deref(), &key) {
+                    eprintln!("Error decrypting {}: {}", input_file, e);
+                }
+            }
+            return Ok(());
+        }
+
+        bail!("Please specify -e (encrypt) or -d (decrypt) when using --dir");
     }
 
     if args.encrypt {
