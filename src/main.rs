@@ -196,6 +196,8 @@ fn main() -> anyhow::Result<()> {
             println!("Output directory: {}", out_dir);
         }
 
+        let mut errors = Vec::new();
+
         if args.encrypt {
             for file_path in &png_files {
                 let pb = m.add(ProgressBar::new(7));
@@ -203,11 +205,12 @@ fn main() -> anyhow::Result<()> {
                 pb.enable_steady_tick(std::time::Duration::from_millis(100));
                 let input_file = file_path.to_string_lossy();
                 if let Err(e) = process_file_encrypt(&input_file, None, args.out_dir.as_deref(), &key_obj.key, args.compression_level.clone(), &pb) {
-                    eprintln!("Error encrypting {}: {}", input_file, e);
+                    errors.push((input_file.to_string(), e));
+                    pb.finish_with_message(format!("{} failed!", file_path.to_string_lossy()));
+                } else {
+                    pb.finish_with_message(format!("{} encrypted", file_path.to_string_lossy()));
                 }
-                pb.finish_with_message(format!("{} encrypted", file_path.to_string_lossy()));
             }
-            return Ok(());
         }
 
         if args.decrypt {
@@ -217,9 +220,18 @@ fn main() -> anyhow::Result<()> {
                 pb.enable_steady_tick(std::time::Duration::from_millis(100));
                 let input_file = file_path.to_string_lossy();
                 if let Err(e) = process_file_decrypt(&input_file, None, args.out_dir.as_deref(), &key_obj.key, &pb) {
-                    eprintln!("Error decrypting {}: {}", input_file, e);
+                    errors.push((input_file.to_string(), e));
+                    pb.finish_with_message(format!("{} failed!", file_path.to_string_lossy()));
+                }else {
+                    pb.finish_with_message(format!("{} encrypted", file_path.to_string_lossy()));
                 }
-                pb.finish_with_message(format!("{} encrypted", file_path.to_string_lossy()));
+            }
+        }
+
+        if !errors.is_empty() {
+            eprintln!("\nFailed to process {} file(s):", errors.len());
+            for (file, error) in &errors {
+                eprintln!("{}: {}", file, error);
             }
             return Ok(());
         }
