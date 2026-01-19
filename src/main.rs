@@ -1,10 +1,33 @@
 use std::io::Write;
 use crate::png::{CompressionLevel, DecodedPng};
 use std::time::Instant;
+use anyhow::bail;
 use pbkdf2::pbkdf2_hmac;
 use rand::RngCore;
 use sha2::Sha256;
+use clap::Parser;
 mod png;
+
+#[derive(Parser, Debug)]
+struct Args {
+    #[arg(short = 'i', long = "input")]
+    input_file: Option<String>,
+    
+    #[arg(short = 'k', long = "key")]
+    key_path: Option<String>,
+    
+    #[arg(short = 'g', long = "generate")]
+    password: Option<String>,
+    
+    #[arg(short = 'e', long = "encrypt")]
+    encrypt: bool,
+    
+    #[arg(short = 'd', long = "decrypt")]
+    decrypt: bool,
+
+    #[arg(long, required = false, default_value = "lossless")]
+    compression_level: CompressionLevel
+}
 
 pub fn derive_key_from_password(password: &str, salt: Option<&[u8; 16]>) -> ([u8; 32], [u8; 16]) {
     let salt = match salt {
@@ -21,35 +44,65 @@ pub fn derive_key_from_password(password: &str, salt: Option<&[u8; 16]>) -> ([u8
 
     (key, salt)
 }
-fn main() -> anyhow::Result<()> {
-    let mut key_outer = [0u8; 32];
 
-    if !std::fs::exists("./key.txt")? {
-        let (new_key, salt) = derive_key_from_password("helios", None);
-        let mut file = std::fs::File::create("./key.txt")?;
+fn load_key(key_path: &str) -> anyhow::Result<[u8; 32]> {
+    let data = std::fs::read(key_path)?;
+    if data.len() != 32 {
+        anyhow::bail!("Key file has invalid length (expected 32 bytes, got {})", data.len());
+    }
+    let mut key_array = [0u8; 32];
+    key_array.copy_from_slice(&data);
+    Ok(key_array)
+}
+
+fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+
+    if let Some(password) = args.password {
+        let key_path = args.key_path.ok_or_else(|| anyhow::anyhow!("Key path (-k) required when generating key"))?;
+        let (new_key, salt) = derive_key_from_password(&password, None);
+        let mut file = std::fs::File::create(&key_path)?;
         file.write_all(&new_key)?;
-        println!("Key: {:?} Salt: {:?}", new_key, salt);
-        key_outer = new_key;
-    }else{
-        let data = std::fs::read("./key.txt")?;
-        if data.len() != 32 {
-            anyhow::bail!("Key file has invalid length (expected 32 bytes, got {})", data.len());
-        }
-        let mut key_array = [0u8; 32];
-        key_array.copy_from_slice(&data);
-        key_outer = key_array;
+        println!("Key generated and saved to: {}", key_path);
+        println!("Salt: {:?}", salt);
+        return Ok(());
     }
 
-    let start_time = Instant::now();
-    let image = DecodedPng::read_from_file("e_file.png", Some(&key_outer))?;
-    let elapsed = start_time.elapsed();
-    println!("{:#?}", image.info);
-    println!("Reading PNG took: {:#?}", elapsed);
+    if args.encrypt {
+        let input_file = args.input_file.ok_or_else(|| anyhow::anyhow!("Input file required when encrypting"))?;
+        let key = if let Some(key_path) = args.key_path {
+            load_key(&key_path)?
+        }else{
+            bail!("Input file required when encrypting");
+        };
 
-    let start_time = Instant::now();
-    image.save_optimized("d_file.png", CompressionLevel::Lossless, None)?;
-    let elapsed = start_time.elapsed();
-    println!("Saving PNG Took: {:?}", elapsed);
+        let start_time = Instant::now();
+        let image = DecodedPng::read_from_file(&input_file, None)?;
+        let elapsed = start_time.elapsed();
+        println!("Reading PNG took: {:#?}", elapsed);
 
-    Ok(())
+        let output_file = format!("{}_encrypted.png", input_file.trim_end_matches(".png"));
+        image.save_optimized(&output_file, CompressionLevel::Lossless, Some(&key))?;
+        return Ok(());
+    }
+
+    if args.decrypt {
+        let input_file = args.input_file.ok_or_else(|| anyhow::anyhow!("Input file required when decrypting"))?;
+        let key = if let Some(key_path) = args.key_path {
+            load_key(&key_path)?
+        }else{
+            bail!("Input file required when decrypting");
+        };
+
+        let start_time = Instant::now();
+        let image = DecodedPng::read_from_file(&input_file, Some(&key))?;
+        let elapsed = start_time.elapsed();
+        println!("Reading PNG took: {:#?}", elapsed);
+
+        let output_file = format!("{}_decrypted.png", input_file.trim_end_matches(".png"));
+        image.save_optimized(&output_file, CompressionLevel::Lossless, None)?;
+        return Ok(());
+    }
+
+    anyhow::bail!("Please specify one of: -g (generate key), -e (encrypt), or -d (decrypt)");
 }
