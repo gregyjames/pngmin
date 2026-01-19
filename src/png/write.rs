@@ -1,5 +1,7 @@
 use std::io::Write;
 use std::num::NonZeroU64;
+use aes_gcm::{AeadCore, Aes256Gcm, KeyInit};
+use aes_gcm::aead::{Aead, OsRng};
 use anyhow::{Context, Result};
 use byteorder::{BigEndian, WriteBytesExt};
 use crc32fast::Hasher;
@@ -13,10 +15,10 @@ use crate::png::optimization::{choose_best_filter, optimize_alpha_channel, quant
 
 impl DecodedPng {
     pub fn save(&self, path: &str) -> Result<()> {
-        self.save_optimized(path, CompressionLevel::Balanced)
+        self.save_optimized(path, CompressionLevel::Balanced, None)
     }
 
-    pub fn save_optimized(&self, path: &str, compression_level: CompressionLevel) -> Result<()> {
+    pub fn save_optimized(&self, path: &str, compression_level: CompressionLevel, encryption_key: Option<&[u8; 32]>) -> Result<()> {
         let width = self.info.width as usize;
         let height = self.info.height as usize;
 
@@ -110,27 +112,41 @@ impl DecodedPng {
         ihdr_data.write_u8(0)?; // compression
         ihdr_data.write_u8(0)?; // filter
         ihdr_data.write_u8(0)?; // interlace
-        write_chunk(&mut file, &IHDR, &ihdr_data)?;
+        write_chunk(&mut file, &IHDR, &ihdr_data, None)?;
 
         // Write IDAT chunk
-        write_chunk(&mut file, &IDAT, &compressed)?;
+        write_chunk(&mut file, &IDAT, &compressed, encryption_key)?;
 
         // Write IEND chunk
-        write_chunk(&mut file, &IEND, &[])?;
+        write_chunk(&mut file, &IEND, &[], None)?;
 
         Ok(())
     }
 }
 
-pub fn write_chunk(writer: &mut impl Write, chunk_type: &[u8; 4], data: &[u8]) -> Result<()> {
+pub fn write_chunk(writer: &mut impl Write, chunk_type: &[u8; 4], data: &[u8], encryption_key: Option<&[u8; 32]>) -> Result<()> {
+    let data_to_write = if let Some(encryption_key) = encryption_key {
+        let cipher = Aes256Gcm::new_from_slice(encryption_key).map_err(|e| anyhow::anyhow!(e))?;
+        let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+        let ciphertext = cipher.encrypt(&nonce, data).map_err(|e| anyhow::anyhow!(e))?;
+
+        let mut encrypted_data = Vec::with_capacity(12 + ciphertext.len());
+        encrypted_data.extend_from_slice(nonce.as_slice());
+        encrypted_data.extend_from_slice(&ciphertext);
+
+        encrypted_data
+    } else {
+        data.to_vec()
+    };
+
     let mut hasher = Hasher::new();
     hasher.update(chunk_type);
-    hasher.update(data);
+    hasher.update(&data_to_write);
     let crc = hasher.finalize();
 
-    writer.write_u32::<BigEndian>(data.len() as u32)?;
+    writer.write_u32::<BigEndian>(data_to_write.len() as u32)?;
     writer.write_all(chunk_type)?;
-    writer.write_all(data)?;
+    writer.write_all(&data_to_write)?;
     writer.write_u32::<BigEndian>(crc)?;
 
     Ok(())

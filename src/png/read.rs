@@ -1,4 +1,6 @@
 use std::io::{Read, Cursor};
+use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
+use aes_gcm::aead::Aead;
 use anyhow::{bail, Context, Result};
 use byteorder::{BigEndian, ReadBytesExt};
 use flate2::read::ZlibDecoder;
@@ -24,7 +26,7 @@ impl DecodedPng {
             alpha: self.rgba[base + 3],
         }
     }
-    pub fn read_from_file(path: &str) -> Result<DecodedPng> {
+    pub fn read_from_file(path: &str, decryption_key: Option<&[u8; 32]>) -> Result<DecodedPng> {
         let mut file = std::fs::File::open(path).with_context(|| format!("Could not open file {}", path))?;
 
         let mut bytes: Vec<u8> = Vec::new();
@@ -90,7 +92,20 @@ impl DecodedPng {
                 })
             }
             else if chunk_type == IDAT{
-                idat_data.extend(&data[..]);
+                let decrypted_data = if decryption_key.is_some() && data.len() > 12 {
+                    let key = decryption_key.unwrap();
+                    let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| anyhow::anyhow!(e))?;
+
+                    // Extract nonce (first 12 bytes) and ciphertext (rest)
+                    let nonce = Nonce::from_slice(&data[..12]);
+                    let ciphertext = &data[12..];
+
+                    // Decrypt
+                    cipher.decrypt(nonce, ciphertext).map_err(|e| anyhow::anyhow!(e))?
+                } else {
+                    data
+                };
+                idat_data.extend(&decrypted_data[..]);
             }
             else if chunk_type == IEND{
                 break;
