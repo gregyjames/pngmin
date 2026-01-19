@@ -25,8 +25,11 @@ struct Args {
     #[arg(short = 'd', long = "decrypt")]
     decrypt: bool,
 
-    #[arg(long, required = false, default_value = "lossless")]
-    compression_level: CompressionLevel
+    #[arg(short = 'm', long = "level", required = false, default_value = "lossless")]
+    compression_level: CompressionLevel,
+
+    #[arg(short = 'o', required = false)]
+    outfile: Option<String>,
 }
 
 pub fn derive_key_from_password(password: &str, salt: Option<&[u8; 16]>) -> ([u8; 32], [u8; 16]) {
@@ -79,10 +82,15 @@ fn main() -> anyhow::Result<()> {
         let start_time = Instant::now();
         let image = DecodedPng::read_from_file(&input_file, None)?;
         let elapsed = start_time.elapsed();
-        println!("Reading PNG took: {:#?}", elapsed);
+        println!("Reading PNG took: {:?}, using compression mode: {:?}", elapsed, args.compression_level);
 
-        let output_file = format!("{}_encrypted.png", input_file.trim_end_matches(".png"));
-        image.save_optimized(&output_file, CompressionLevel::Lossless, Some(&key))?;
+        let output_file = if args.outfile.is_some() {
+            args.outfile.unwrap()
+        } else {
+            format!("{}_encrypted.png", input_file.trim_end_matches(".png"))
+        };
+
+        image.save_optimized(&output_file, args.compression_level, Some(&key))?;
         return Ok(());
     }
 
@@ -99,7 +107,12 @@ fn main() -> anyhow::Result<()> {
         let elapsed = start_time.elapsed();
         println!("Reading PNG took: {:#?}", elapsed);
 
-        let output_file = format!("{}_decrypted.png", input_file.trim_end_matches(".png"));
+        let output_file = if args.outfile.is_some() {
+            args.outfile.unwrap()
+        } else {
+            format!("{}_decrypted.png", input_file.trim_end_matches(".png"))
+        };
+
         image.save_optimized(&output_file, CompressionLevel::Lossless, None)?;
         return Ok(());
     }
