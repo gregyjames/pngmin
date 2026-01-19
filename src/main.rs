@@ -196,42 +196,52 @@ fn main() -> anyhow::Result<()> {
             println!("Output directory: {}", out_dir);
         }
 
-        let mut errors = Vec::new();
-
         if args.encrypt {
+            let mut errors = Vec::new();
+
             for file_path in &png_files {
                 let pb = m.add(ProgressBar::new(7));
-                pb.set_style(ProgressStyle::with_template(PROGRESS_TEMPLATE)?);
+                pb.set_style(ProgressStyle::with_template(PROGRESS_TEMPLATE)?.tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ "));
                 pb.enable_steady_tick(std::time::Duration::from_millis(100));
                 let input_file = file_path.to_string_lossy();
                 if let Err(e) = process_file_encrypt(&input_file, None, args.out_dir.as_deref(), &key_obj.key, args.compression_level.clone(), &pb) {
                     errors.push((input_file.to_string(), e));
                     pb.finish_with_message(format!("{} failed!", file_path.to_string_lossy()));
                 } else {
-                    pb.finish_with_message(format!("{} encrypted", file_path.to_string_lossy()));
+                    pb.finish_with_message(format!("{} encrypted.", file_path.to_string_lossy()));
                 }
             }
+
+            if !errors.is_empty() {
+                eprintln!("\nFailed to process {} file(s):", errors.len());
+                for (file, error) in &errors {
+                    eprintln!("{}: {}", file, error);
+                }
+            }
+            return Ok(());
         }
 
         if args.decrypt {
+            let mut errors = Vec::new();
+
             for file_path in &png_files {
                 let pb = m.add(ProgressBar::new(7));
-                pb.set_style(ProgressStyle::with_template(PROGRESS_TEMPLATE)?);
+                pb.set_style(ProgressStyle::with_template(PROGRESS_TEMPLATE)?.tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ "));
                 pb.enable_steady_tick(std::time::Duration::from_millis(100));
                 let input_file = file_path.to_string_lossy();
                 if let Err(e) = process_file_decrypt(&input_file, None, args.out_dir.as_deref(), &key_obj.key, &pb) {
                     errors.push((input_file.to_string(), e));
                     pb.finish_with_message(format!("{} failed!", file_path.to_string_lossy()));
                 }else {
-                    pb.finish_with_message(format!("{} encrypted", file_path.to_string_lossy()));
+                    pb.finish_with_message(format!("{} decrypted.", file_path.to_string_lossy()));
                 }
             }
-        }
 
-        if !errors.is_empty() {
-            eprintln!("\nFailed to process {} file(s):", errors.len());
-            for (file, error) in &errors {
-                eprintln!("{}: {}", file, error);
+            if !errors.is_empty() {
+                eprintln!("\nFailed to process {} file(s):", errors.len());
+                for (file, error) in &errors {
+                    eprintln!("{}: {}", file, error);
+                }
             }
             return Ok(());
         }
@@ -249,7 +259,7 @@ fn main() -> anyhow::Result<()> {
         };
 
         let pb = ProgressBar::new(7);
-        pb.set_style(ProgressStyle::with_template(PROGRESS_TEMPLATE)?);
+        pb.set_style(ProgressStyle::with_template(PROGRESS_TEMPLATE)?.tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ "));
         pb.enable_steady_tick(std::time::Duration::from_millis(100));
         let image = DecodedPng::read_from_file(&input_file, None, &pb)?;
 
@@ -266,7 +276,7 @@ fn main() -> anyhow::Result<()> {
 
     if args.decrypt {
         let pb = ProgressBar::new(7);
-        pb.set_style(ProgressStyle::with_template(PROGRESS_TEMPLATE)?);
+        pb.set_style(ProgressStyle::with_template(PROGRESS_TEMPLATE)?.tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ "));
         pb.enable_steady_tick(std::time::Duration::from_millis(100));
         let input_file = args.input_file.ok_or_else(|| anyhow::anyhow!("Input file required when decrypting"))?;
         let key_object = if let Some(key_path) = args.key_path {
