@@ -1,12 +1,12 @@
-use std::io::Write;
-use std::path::{Path, PathBuf};
 use crate::png::{CompressionLevel, DecodedPng};
-use std::time::Instant;
 use anyhow::bail;
+use clap::Parser;
+use indicatif::{MultiProgress, ProgressBar, ProgressState, ProgressStyle};
 use pbkdf2::pbkdf2_hmac;
 use rand::RngCore;
 use sha2::Sha256;
-use clap::Parser;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 mod png;
 
 #[derive(Parser, Debug)]
@@ -19,13 +19,13 @@ struct Args {
 
     #[arg(short = 'k', long = "key")]
     key_path: Option<String>,
-    
+
     #[arg(short = 'g', long = "generate")]
     password: Option<String>,
-    
+
     #[arg(short = 'e', long = "encrypt")]
     encrypt: bool,
-    
+
     #[arg(short = 'd', long = "decrypt")]
     decrypt: bool,
 
@@ -130,11 +130,9 @@ fn get_output_path(input_path: &str, out_dir: Option<&str>, suffix: &str) -> Str
 }
 
 
-fn process_file_encrypt(input_file: &str, output_file: Option<String>, out_dir: Option<&str>, key: &[u8; 32], compression_level: CompressionLevel) -> anyhow::Result<()> {
-    let start_time = Instant::now();
-    let image = DecodedPng::read_from_file(input_file, None)?;
-    let elapsed = start_time.elapsed();
-    println!("Reading {} took: {:?}", input_file, elapsed);
+//3 + 4
+fn process_file_encrypt(input_file: &str, output_file: Option<String>, out_dir: Option<&str>, key: &[u8; 32], compression_level: CompressionLevel, pb: &ProgressBar) -> anyhow::Result<()> {
+    let image = DecodedPng::read_from_file(input_file, None, pb)?;
 
     let output = output_file.unwrap_or_else(|| {
         get_output_path(input_file, out_dir, "_encrypted")
@@ -144,18 +142,12 @@ fn process_file_encrypt(input_file: &str, output_file: Option<String>, out_dir: 
         std::fs::create_dir_all(out_dir)?;
     }
 
-    let start_time = Instant::now();
-    image.save_optimized(&output, compression_level, Some(key))?;
-    let elapsed = start_time.elapsed();
-    println!("Encrypted {} -> {} (took: {:?})", input_file, output, elapsed);
+    image.save_optimized(&output, compression_level, Some(key), pb)?;
     Ok(())
 }
 
-fn process_file_decrypt(input_file: &str, output_file: Option<String>, out_dir: Option<&str>, key: &[u8; 32]) -> anyhow::Result<()> {
-    let start_time = Instant::now();
-    let image = DecodedPng::read_from_file(input_file, Some(key))?;
-    let elapsed = start_time.elapsed();
-    println!("Reading {} took: {:?}", input_file, elapsed);
+fn process_file_decrypt(input_file: &str, output_file: Option<String>, out_dir: Option<&str>, key: &[u8; 32], pb: &ProgressBar) -> anyhow::Result<()> {
+    let image = DecodedPng::read_from_file(input_file, Some(key), pb)?;
 
     let output = output_file.unwrap_or_else(|| {
         get_output_path(input_file, out_dir, "_decrypted")
@@ -165,13 +157,11 @@ fn process_file_decrypt(input_file: &str, output_file: Option<String>, out_dir: 
         std::fs::create_dir_all(out_dir)?;
     }
 
-    let start_time = Instant::now();
-    image.save_optimized(&output, CompressionLevel::Lossless, None)?;
-    let elapsed = start_time.elapsed();
-    println!("Decrypted {} -> {} (took: {:?})", input_file, output, elapsed);
+    image.save_optimized(&output, CompressionLevel::Lossless, None, pb)?;
     Ok(())
 }
 
+const PROGRESS_TEMPLATE: &str = "{spinner:.green} [{elapsed_precise}] {bar:40.cyan/blue} {msg}";
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
@@ -191,6 +181,8 @@ fn main() -> anyhow::Result<()> {
         };
 
         let png_files = get_png_files(&dir)?;
+        let m = MultiProgress::new();
+
         if png_files.is_empty() {
             println!("No PNG files found in directory: {}", dir);
             return Ok(());
@@ -206,24 +198,33 @@ fn main() -> anyhow::Result<()> {
 
         if args.encrypt {
             for file_path in &png_files {
+                let pb = m.add(ProgressBar::new(7));
+                pb.set_style(ProgressStyle::with_template(PROGRESS_TEMPLATE)?);
+                pb.enable_steady_tick(std::time::Duration::from_millis(100));
                 let input_file = file_path.to_string_lossy();
-                if let Err(e) = process_file_encrypt(&input_file, None, args.out_dir.as_deref(), &key_obj.key, args.compression_level.clone()) {
+                if let Err(e) = process_file_encrypt(&input_file, None, args.out_dir.as_deref(), &key_obj.key, args.compression_level.clone(), &pb) {
                     eprintln!("Error encrypting {}: {}", input_file, e);
                 }
+                pb.finish_with_message(format!("{} encrypted", file_path.to_string_lossy()));
             }
             return Ok(());
         }
 
         if args.decrypt {
             for file_path in &png_files {
+                let pb = m.add(ProgressBar::new(7));
+                pb.set_style(ProgressStyle::with_template(PROGRESS_TEMPLATE)?);
+                pb.enable_steady_tick(std::time::Duration::from_millis(100));
                 let input_file = file_path.to_string_lossy();
-                if let Err(e) = process_file_decrypt(&input_file, None, args.out_dir.as_deref(), &key_obj.key) {
+                if let Err(e) = process_file_decrypt(&input_file, None, args.out_dir.as_deref(), &key_obj.key, &pb) {
                     eprintln!("Error decrypting {}: {}", input_file, e);
                 }
+                pb.finish_with_message(format!("{} encrypted", file_path.to_string_lossy()));
             }
             return Ok(());
         }
 
+        m.clear()?;
         bail!("Please specify -e (encrypt) or -d (decrypt) when using --dir");
     }
 
@@ -235,10 +236,10 @@ fn main() -> anyhow::Result<()> {
             bail!("Input file required when encrypting");
         };
 
-        let start_time = Instant::now();
-        let image = DecodedPng::read_from_file(&input_file, None)?;
-        let elapsed = start_time.elapsed();
-        println!("Reading PNG took: {:?}, using compression mode: {:?}", elapsed, args.compression_level);
+        let pb = ProgressBar::new(7);
+        pb.set_style(ProgressStyle::with_template(PROGRESS_TEMPLATE)?);
+        pb.enable_steady_tick(std::time::Duration::from_millis(100));
+        let image = DecodedPng::read_from_file(&input_file, None, &pb)?;
 
         let output_file = if args.outfile.is_some() {
             args.outfile.unwrap()
@@ -246,11 +247,15 @@ fn main() -> anyhow::Result<()> {
             format!("{}_encrypted.png", input_file.trim_end_matches(".png"))
         };
 
-        image.save_optimized(&output_file, args.compression_level, Some(&key_obj.key))?;
+        image.save_optimized(&output_file, args.compression_level, Some(&key_obj.key), &pb)?;
+        pb.finish();
         return Ok(());
     }
 
     if args.decrypt {
+        let pb = ProgressBar::new(7);
+        pb.set_style(ProgressStyle::with_template(PROGRESS_TEMPLATE)?);
+        pb.enable_steady_tick(std::time::Duration::from_millis(100));
         let input_file = args.input_file.ok_or_else(|| anyhow::anyhow!("Input file required when decrypting"))?;
         let key_object = if let Some(key_path) = args.key_path {
             KeyObject::load_key(&key_path)?
@@ -258,10 +263,7 @@ fn main() -> anyhow::Result<()> {
             bail!("Input file required when decrypting");
         };
 
-        let start_time = Instant::now();
-        let image = DecodedPng::read_from_file(&input_file, Some(&key_object.key))?;
-        let elapsed = start_time.elapsed();
-        println!("Reading PNG took: {:#?}", elapsed);
+        let image = DecodedPng::read_from_file(&input_file, Some(&key_object.key), &pb)?;
 
         let output_file = if args.outfile.is_some() {
             args.outfile.unwrap()
@@ -269,7 +271,8 @@ fn main() -> anyhow::Result<()> {
             format!("{}_decrypted.png", input_file.trim_end_matches(".png"))
         };
 
-        image.save_optimized(&output_file, CompressionLevel::Lossless, None)?;
+        image.save_optimized(&output_file, CompressionLevel::Lossless, None, &pb)?;
+        pb.finish();
         return Ok(());
     }
 

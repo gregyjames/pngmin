@@ -4,7 +4,7 @@ use aes_gcm::aead::Aead;
 use anyhow::{bail, Context, Result};
 use byteorder::{BigEndian, ReadBytesExt};
 use flate2::read::ZlibDecoder;
-
+use indicatif::ProgressBar;
 use crate::png::types::*;
 use crate::png::constants::*;
 use crate::png::filter::unfilter_row;
@@ -26,7 +26,8 @@ impl DecodedPng {
             alpha: self.rgba[base + 3],
         }
     }
-    pub fn read_from_file(path: &str, decryption_key: Option<&[u8; 32]>) -> Result<DecodedPng> {
+    pub fn read_from_file(path: &str, decryption_key: Option<&[u8; 32]>, pb: &ProgressBar) -> Result<DecodedPng> {
+        pb.set_message(format!("Reading image {}", path));
         let mut file = std::fs::File::open(path).with_context(|| format!("Could not open file {}", path))?;
 
         let mut bytes: Vec<u8> = Vec::new();
@@ -139,8 +140,11 @@ impl DecodedPng {
             bail!("Decompressed image data doesn't match expected image data.");
         }
 
+        pb.inc(1);
+
         let mut unfiltered = vec![0u8; height * row_bytes];
 
+        pb.set_message("Unfilting rows in image...");
         for row in 0..height {
             let start = row * (1 +row_bytes);
             let filter_type = raw[start];
@@ -160,9 +164,11 @@ impl DecodedPng {
 
             unfilter_row(filter_type, bytes_per_pixel, source, prev, dest);
         }
+        pb.inc(1);
 
         //let mut pixels: Vec<Pixel> = Vec::with_capacity(width * height);
 
+        pb.set_message("Decompressed image data...");
         let mut rgba = Vec::with_capacity(width * height * 4);
         match info.image_type {
             ImageType::Truecolor => {
@@ -178,6 +184,7 @@ impl DecodedPng {
             },
             _ => unreachable!()
         }
+        pb.inc(1);
 
         let image = DecodedPng{
             info,

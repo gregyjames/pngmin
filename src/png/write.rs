@@ -7,6 +7,7 @@ use byteorder::{BigEndian, WriteBytesExt};
 use crc32fast::Hasher;
 use flate2::Compression;
 use flate2::write::ZlibEncoder;
+use indicatif::ProgressBar;
 use zopfli::{compress, Format, Options};
 
 use crate::png::types::*;
@@ -14,14 +15,11 @@ use crate::png::constants::*;
 use crate::png::optimization::{choose_best_filter, optimize_alpha_channel, quantize_colors};
 
 impl DecodedPng {
-    pub fn save(&self, path: &str) -> Result<()> {
-        self.save_optimized(path, CompressionLevel::Balanced, None)
-    }
-
-    pub fn save_optimized(&self, path: &str, compression_level: CompressionLevel, encryption_key: Option<&[u8; 32]>) -> Result<()> {
+    pub fn save_optimized(&self, path: &str, compression_level: CompressionLevel, encryption_key: Option<&[u8; 32]>, pb: &ProgressBar) -> Result<()> {
         let width = self.info.width as usize;
         let height = self.info.height as usize;
 
+        pb.set_message("Optimizing image...");
         let quantized_rgba = match compression_level {
             CompressionLevel::Lossless => {
                 &self.rgba[..]
@@ -37,6 +35,8 @@ impl DecodedPng {
         let optimized_rgba = optimize_alpha_channel(quantized_rgba);
 
         let has_alpha = optimized_rgba.chunks_exact(4).any(|pixel| pixel[3] != 255);
+
+        pb.inc(1);
 
         let (color_type, bytes_per_pixel) = if has_alpha {
             (6u8, 4usize) // RGBA
@@ -60,6 +60,7 @@ impl DecodedPng {
         }
 
         // Apply filters and build filtered scanlines
+        pb.set_message("Applying optimal filters...");
         let mut filtered = Vec::with_capacity(height * (1 + row_bytes));
         for row in 0..height {
             let row_start = row * row_bytes;
@@ -79,7 +80,9 @@ impl DecodedPng {
             filtered.push(filter_type);
             filtered.extend_from_slice(&filtered_row);
         }
+        pb.inc(1);
 
+        pb.set_message("Compressing image...");
         let mut compressed = Vec::new();
 
         match compression_level {
@@ -98,6 +101,9 @@ impl DecodedPng {
             }
         }
 
+        pb.inc(1);
+
+        pb.set_message("Writing image...");
         let mut file = std::fs::File::create(path).with_context(|| format!("Could not create file {}", path))?;
 
         // Write PNG signature
@@ -119,6 +125,7 @@ impl DecodedPng {
 
         // Write IEND chunk
         write_chunk(&mut file, &IEND, &[], None)?;
+        pb.inc(1);
 
         Ok(())
     }
