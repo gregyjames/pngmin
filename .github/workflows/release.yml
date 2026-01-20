@@ -3,10 +3,10 @@ name: Release
 on:
   push:
     tags:
-      - 'v*.*.*'  # Matches v1.0.0, v1.2.3, etc.
+      - 'v*.*.*'
 
 permissions:
-  contents: write  # Required for creating releases
+  contents: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -22,12 +22,15 @@ jobs:
           - os: macos-latest
             target: x86_64-apple-darwin
             artifact-name: pngmin-x86_64-apple-darwin
+            output-name: pngmin-macos-x86_64.tar.gz
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact-name: pngmin-aarch64-apple-darwin
+            output-name: pngmin-macos-arm64.tar.gz
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact-name: pngmin-x86_64-pc-windows-msvc
+            output-name: pngmin-windows-x86_64.zip
 
     steps:
       - name: Checkout code
@@ -45,22 +48,20 @@ jobs:
         shell: bash
         run: |
           if [ "${{ runner.os }}" == "Windows" ]; then
-            mkdir ${{ matrix.artifact-name }}
-            cp target/${{ matrix.target }}/release/pngmin.exe ${{ matrix.artifact-name }}/
-            cd ${{ matrix.artifact-name }}
-            tar -czf ../${{ matrix.artifact-name }}.tar.gz pngmin.exe
-            cd ..
+            cd target/${{ matrix.target }}/release
+            zip ../../../${{ matrix.output-name }} pngmin.exe
+            cd ../../..
           else
-            mkdir ${{ matrix.artifact-name }}
-            cp target/${{ matrix.target }}/release/pngmin ${{ matrix.artifact-name }}/
-            tar -czf ${{ matrix.artifact-name }}.tar.gz -C ${{ matrix.artifact-name }} pngmin
+            cd target/${{ matrix.target }}/release
+            tar -czf ../../../${{ matrix.output-name }} pngmin
+            cd ../../..
           fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact-name }}
-          path: ${{ matrix.artifact-name }}.tar.gz
+          path: ${{ matrix.output-name }}
           retention-days: 1
 
   create-release:
@@ -80,23 +81,32 @@ jobs:
         with:
           path: artifacts
 
-      - name: Prepare release assets
+      - name: Extract and prepare release assets
         shell: bash
         run: |
           cd artifacts
+          # Each artifact directory contains a zip file (created by upload-artifact)
+          # Extract each zip to get the actual archive file we created
           for dir in */; do
-            dirname=${dir%/}
-            if [[ "$dirname" == *"windows"* ]]; then
-              # Rename Windows archive
-              mv "$dirname.tar.gz" "pngmin-windows-x86_64.tar.gz"
-            elif [[ "$dirname" == *"aarch64"* ]]; then
-              # Rename ARM64 Mac archive
-              mv "$dirname.tar.gz" "pngmin-macos-arm64.tar.gz"
-            elif [[ "$dirname" == *"x86_64-apple"* ]]; then
-              # Rename Intel Mac archive
-              mv "$dirname.tar.gz" "pngmin-macos-x86_64.tar.gz"
+            if [ -d "$dir" ]; then
+              cd "$dir"
+              # Find and extract the zip file
+              for zipfile in *.zip; do
+                if [ -f "$zipfile" ]; then
+                  unzip -q "$zipfile"
+                  # Now find the actual archive file we created
+                  for archive in *.tar.gz *.zip; do
+                    if [ -f "$archive" ] && [[ "$archive" == pngmin-* ]]; then
+                      # Copy to root with the same name
+                      cp "$archive" "../../$archive"
+                    fi
+                  done
+                fi
+              done
+              cd ..
             fi
           done
+          cd ..
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
@@ -109,19 +119,16 @@ jobs:
             ### Downloads
             - **macOS (Intel)**: `pngmin-macos-x86_64.tar.gz`
             - **macOS (Apple Silicon)**: `pngmin-macos-arm64.tar.gz`
-            - **Windows**: `pngmin-windows-x86_64.tar.gz`
+            - **Windows**: `pngmin-windows-x86_64.zip`
             
             ### Installation
             1. Download the appropriate archive for your platform
             2. Extract the archive
             3. Move the `pngmin` (or `pngmin.exe` on Windows) binary to a directory in your PATH
-            
-            ### Usage
-            See the [README](https://github.com/${{ github.repository }}) for usage instructions.
           files: |
-            artifacts/pngmin-macos-x86_64.tar.gz
-            artifacts/pngmin-macos-arm64.tar.gz
-            artifacts/pngmin-windows-x86_64.tar.gz
+            pngmin-macos-x86_64.tar.gz
+            pngmin-macos-arm64.tar.gz
+            pngmin-windows-x86_64.zip
           draft: false
           prerelease: false
         env:
