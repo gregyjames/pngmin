@@ -1,3 +1,5 @@
+use clap::ValueEnum;
+
 #[derive(Debug)]
 pub enum ImageType {
     Grayscale,
@@ -8,6 +10,7 @@ pub enum ImageType {
     Unknown,
 }
 
+#[derive(ValueEnum, Clone, Debug)]
 pub enum CompressionLevel{
     Lossless,
     Balanced,
