@@ -7,6 +7,9 @@ PNG Parser and Compressor
 ## Rambling
 I don't know why I am making this. I got super ADHD today and decided to understand how PNG works so I read through the spec and put this together. Eventually, I want to use this to compress PNGs so I can stop using TinyPNG but that is a bit away, going to look at what magic OxiPNG is doing. Currently just support parsing (reading) and writing PNG files. Overall, this has been pretty fun actually learning more about one of the super common file formats we interact with on the web daily.
 
+### Rambling pt. 2
+Okay, finally thought of a cool use case for this. Encryption! Since a PNG is basically just a compressed data stream between a Header and an end block, the compressed data can be encrypted. Why? Well what if you want to put your pictures on google photos but don't want them to train Gemini without having to update a new security setting every month? If you want to do this, I assume that you need to update the storage mode to lossless, since compressing the image would probably destroy the encrypted data. Given this, I converted this to a CLI app with clap and indicatif that allows you to read/encrypt files or directories with Aes256Gcm.
+
 ## Current Limiations
 - Only RGB/RGBA Support
 - No iterlaced image Support
