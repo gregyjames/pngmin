@@ -1,5 +1,7 @@
 [![Rust](https://github.com/gregyjames/pngmin/actions/workflows/rust.yml/badge.svg)](https://github.com/gregyjames/pngmin/actions/workflows/rust.yml)
 ![GitHub repo size](https://img.shields.io/github/repo-size/gregyjames/pngmin)
+![GitHub Release](https://img.shields.io/github/v/release/gregyjames/pngmin)
+
 
 # pngmin
 PNG Parser, Optimizer, and Encryptor.
