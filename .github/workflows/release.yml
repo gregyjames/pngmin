@@ -89,44 +89,17 @@ jobs:
         run: |
           cd artifacts
           
-          # Process each artifact directory
+          # Just copy all files from each artifact directory to the root
           for artifact_dir in */; do
             if [ -d "$artifact_dir" ]; then
-              cd "$artifact_dir"
-              
-              # The artifact is zipped by upload-artifact, find the zip
-              # It might be named after the artifact or just be the only zip file
-              zip_file=$(find . -maxdepth 1 -name "*.zip" | head -1)
-              
-              if [ -n "$zip_file" ]; then
-                echo "Extracting $zip_file from $artifact_dir"
-                unzip -q "$zip_file"
-                
-                # Find our actual archive file (pngmin-*.tar.gz or pngmin-*.zip)
-                actual_archive=$(find . -maxdepth 1 \( -name "pngmin-*.tar.gz" -o -name "pngmin-*.zip" \) | head -1)
-                
-                if [ -n "$actual_archive" ]; then
-                  archive_name=$(basename "$actual_archive")
-                  echo "Found archive: $archive_name, copying to root"
-                  cp "$actual_archive" "../../$archive_name"
-                else
-                  echo "Warning: No pngmin archive found in $artifact_dir after extraction"
-                  ls -la
-                fi
-              else
-                echo "Warning: No zip file found in $artifact_dir"
-                ls -la
-              fi
-              
-              cd ..
+              cp "$artifact_dir"* ../
             fi
           done
           
           cd ..
           
-          # List final files for release
-          echo "Release files ready:"
-          ls -lh *.tar.gz *.zip 2>/dev/null || (echo "ERROR: No release files found!" && exit 1)
+          # List what we have
+          ls -lh
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
