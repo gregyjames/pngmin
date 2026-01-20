@@ -88,28 +88,45 @@ jobs:
         shell: bash
         run: |
           cd artifacts
-          # Each artifact directory contains a zip file (created by upload-artifact)
-          # Extract each zip to get the actual archive file we created
-          for dir in */; do
-            if [ -d "$dir" ]; then
-              cd "$dir"
-              # Find and extract the zip file
-              for zipfile in *.zip; do
-                if [ -f "$zipfile" ]; then
-                  unzip -q "$zipfile"
-                  # Now find the actual archive file we created
-                  for archive in *.tar.gz *.zip; do
-                    if [ -f "$archive" ] && [[ "$archive" == pngmin-* ]]; then
-                      # Copy to root with the same name
-                      cp "$archive" "../../$archive"
-                    fi
-                  done
+          
+          # Process each artifact directory
+          for artifact_dir in */; do
+            if [ -d "$artifact_dir" ]; then
+              cd "$artifact_dir"
+              
+              # The artifact is zipped by upload-artifact, find the zip
+              # It might be named after the artifact or just be the only zip file
+              zip_file=$(find . -maxdepth 1 -name "*.zip" | head -1)
+              
+              if [ -n "$zip_file" ]; then
+                echo "Extracting $zip_file from $artifact_dir"
+                unzip -q "$zip_file"
+                
+                # Find our actual archive file (pngmin-*.tar.gz or pngmin-*.zip)
+                actual_archive=$(find . -maxdepth 1 \( -name "pngmin-*.tar.gz" -o -name "pngmin-*.zip" \) | head -1)
+                
+                if [ -n "$actual_archive" ]; then
+                  archive_name=$(basename "$actual_archive")
+                  echo "Found archive: $archive_name, copying to root"
+                  cp "$actual_archive" "../../$archive_name"
+                else
+                  echo "Warning: No pngmin archive found in $artifact_dir after extraction"
+                  ls -la
                 fi
-              done
+              else
+                echo "Warning: No zip file found in $artifact_dir"
+                ls -la
+              fi
+              
               cd ..
             fi
           done
+          
           cd ..
+          
+          # List final files for release
+          echo "Release files ready:"
+          ls -lh *.tar.gz *.zip 2>/dev/null || (echo "ERROR: No release files found!" && exit 1)
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
