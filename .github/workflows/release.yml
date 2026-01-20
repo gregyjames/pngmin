@@ -124,5 +124,6 @@ jobs:
             pngmin-windows-x86_64.zip
           draft: false
           prerelease: false
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
