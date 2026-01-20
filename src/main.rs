@@ -56,7 +56,7 @@ impl KeyObject{
         };
 
         let mut key = [0u8; 32];
-        pbkdf2_hmac::<Sha256>(password.as_bytes(), &salt, 100_000, &mut key);
+        pbkdf2_hmac::<Sha256>(password.as_bytes(), &salt, 5_000_000, &mut key);
 
         KeyObject{
             key,
