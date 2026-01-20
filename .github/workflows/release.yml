@@ -44,18 +44,21 @@ jobs:
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Prepare artifact
+      - name: Prepare artifact (macOS)
+        if: runner.os != 'Windows'
         shell: bash
         run: |
-          if [ "${{ runner.os }}" == "Windows" ]; then
-            cd target/${{ matrix.target }}/release
-            zip ../../../${{ matrix.output-name }} pngmin.exe
-            cd ../../..
-          else
-            cd target/${{ matrix.target }}/release
-            tar -czf ../../../${{ matrix.output-name }} pngmin
-            cd ../../..
-          fi
+          cd target/${{ matrix.target }}/release
+          tar -czf ../../../${{ matrix.output-name }} pngmin
+          cd ../../..
+
+      - name: Prepare artifact (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cd target/${{ matrix.target }}/release
+          Compress-Archive -Path pngmin.exe -DestinationPath ../../../${{ matrix.output-name }} -Force
+          cd ../../..
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
