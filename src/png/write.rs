@@ -32,8 +32,15 @@ impl DecodedPng {
             }
         };
 
-        let optimized_rgba = optimize_alpha_channel(quantized_rgba);
-
+        let optimized_rgba = match compression_level {
+            CompressionLevel::Lossless => {
+                &self.rgba[..]
+            },
+            CompressionLevel::Balanced | CompressionLevel::Maximum => {
+                &optimize_alpha_channel(quantized_rgba)
+            }
+        };
+        
         let has_alpha = optimized_rgba.chunks_exact(4).any(|pixel| pixel[3] != 255);
 
         pb.inc(1);
