@@ -5,10 +5,12 @@
 PNG Parser, Optimizer, and Encryptor.
 
 ## Rambling
-I don't know why I am making this. I got super ADHD today and decided to understand how PNG works so I read through the spec and put this together. Eventually, I want to use this to compress PNGs so I can stop using TinyPNG but that is a bit away, going to look at what magic OxiPNG is doing. Currently just support parsing (reading) and writing PNG files. Overall, this has been pretty fun actually learning more about one of the super common file formats we interact with on the web daily.
+I don't know why I am making this, I got super ADHD today and decided to understand how PNG works so I read through the spec and put this together. Eventually, I want to use this to compress PNGs so I can stop using TinyPNG but that is a bit away, going to look at what magic OxiPNG is doing. Currently just support parsing (reading) and writing PNG files. Overall, it has been pretty fun learning more about one of the most common file formats we interact with daily.
 
 ### Rambling pt. 2
-Okay, finally thought of a cool use case for this: encryption! Since a PNG is basically just a compressed data stream between a header and an end block, the compressed data can be encrypted. Why would you want to do this? Well what if you want to put your pictures on Google Drive/Photos but don't want them to train Gemini 7.5 Ultra Pro Max on your vacation photos without having to update an obscure new security setting every month (totally not mad about it)? If you want to do this, I assume that you need to update the storage mode to lossless, since compressing the image would probably destroy the encrypted data. Anyways, I converted this to a CLI app that allows you to read/encrypt files or directories with Aes256Gcm using a key generated from a password using Argon2ID.
+Finally thought of a cool use case for this: encryption! Since a PNG is basically just a compressed data stream between a header and an end block, the compressed data can be encrypted. Why would you want to do this? Well, what if you want to store your pictures on Google Drive/Photos but don't want them to train Gemini 7.5 Ultra Pro Max on your vacation photos without having to update an obscure new security setting every month (totally not mad about it)? Thus, I converted this to a CLI app that allows you to read/encrypt files or directories with Aes256Gcm using a key file generated from a password using Argon2 (ID v13).
+
+⚠️ WARNING: If you do want to store these images on Google Photos (or similar platforms), you need to update your Google Photos storage mode to **lossless**, since compressing the image would **destroy** the encrypted data. I am **not** responsible for you losing little Timmy's entire childhood using this.
 
 ## Usage
 ### Generate a Key
