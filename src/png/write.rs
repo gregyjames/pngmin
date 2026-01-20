@@ -86,11 +86,16 @@ impl DecodedPng {
         let mut compressed = Vec::new();
 
         match compression_level {
-            CompressionLevel::Lossless | CompressionLevel::Balanced => {
+            CompressionLevel::Lossless => {
+                let mut encoder = ZlibEncoder::new(Vec::new(), Compression::fast());
+                encoder.write_all(&filtered)?;
+                compressed = encoder.finish()?;
+            },
+            CompressionLevel::Balanced => {
                 let mut encoder = ZlibEncoder::new(Vec::new(), Compression::best());
                 encoder.write_all(&filtered)?;
                 compressed = encoder.finish()?;
-            }
+            },
             CompressionLevel::Maximum => {
                 let options = Options{
                     iteration_count: NonZeroU64::new(100).unwrap(),

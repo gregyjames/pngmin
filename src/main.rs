@@ -1,10 +1,9 @@
 use crate::png::{CompressionLevel, DecodedPng};
 use anyhow::bail;
+use argon2::{Algorithm, Argon2, ParamsBuilder, Version};
 use clap::Parser;
-use indicatif::{MultiProgress, ProgressBar, ProgressState, ProgressStyle};
-use pbkdf2::pbkdf2_hmac;
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use rand::RngCore;
-use sha2::Sha256;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 mod png;
@@ -55,8 +54,18 @@ impl KeyObject{
             }
         };
 
+        let params = ParamsBuilder::new()
+            .m_cost(65536)
+            .t_cost(100)
+            .p_cost(4)
+            .output_len(32)
+            .build()
+            .expect("Invalid parameters for Argon2");
+
+        let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+
         let mut key = [0u8; 32];
-        pbkdf2_hmac::<Sha256>(password.as_bytes(), &salt, 5_000_000, &mut key);
+        argon2.hash_password_into(password.as_bytes(), &salt, &mut key).expect("Argon2 hashing failed.");
 
         KeyObject{
             key,
