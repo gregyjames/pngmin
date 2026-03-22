@@ -56,8 +56,8 @@ pngmin -d --dir ./encrypted -k master-key.bin --out-dir ./decrypted
 |-----------|------------|-------------------------------------|
 | -g        | --generate | Generate a key file from a password |
 | -k        | --key      | Path to key file                    |
-| -d        | --decrypt  | Encrypt mode                        |
-| -e        | --encrypt  | Decrypt mode                        |
+| -d        | --decrypt  | Decrypt mode                        |
+| -e        | --encrypt  | Encrypt mode                        |
 | --dir     |            | Input directory                     |
 | -o        |            | Output filename                     |
 | --out-dir |            | Output directory                    |
