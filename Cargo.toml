@@ -9,7 +9,7 @@ byteorder = "1.5.0"
 crc32fast = "1"
 zopfli = "0.8"
 flate2 = "1.1.9"
-aes-gcm = "0.10.3"
+aes-gcm = "0.11.0"
 rand = "0.10.2"
 clap = { version = "4", features = ["derive"] }
 indicatif = "0.18"
