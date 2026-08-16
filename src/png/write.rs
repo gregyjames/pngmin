@@ -1,7 +1,7 @@
 use std::io::Write;
 use std::num::NonZeroU64;
-use aes_gcm::{AeadCore, Aes256Gcm, KeyInit};
-use aes_gcm::aead::{Aead, OsRng};
+use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
+use aes_gcm::aead::{Aead, Generate};
 use anyhow::{Context, Result};
 use byteorder::{BigEndian, WriteBytesExt};
 use crc32fast::Hasher;
@@ -40,7 +40,7 @@ impl DecodedPng {
                 &optimize_alpha_channel(quantized_rgba)
             }
         };
-        
+
         let has_alpha = optimized_rgba.chunks_exact(4).any(|pixel| pixel[3] != 255);
 
         pb.inc(1);
@@ -164,12 +164,14 @@ impl DecodedPng {
 pub fn write_chunk(writer: &mut impl Write, chunk_type: &[u8; 4], data: &[u8], encryption_key: Option<&[u8; 32]>) -> Result<()> {
     let data_to_write = if let Some(encryption_key) = encryption_key {
         let cipher = Aes256Gcm::new_from_slice(encryption_key).map_err(|e| anyhow::anyhow!(e))?;
-        let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
-        let ciphertext = cipher.encrypt(&nonce, data).map_err(|e| anyhow::anyhow!(e))?;
+        let nonce = Nonce::generate();
+        let cipher_text = cipher
+            .encrypt(&nonce, data)
+            .map_err(|e| anyhow::anyhow!(e))?;
 
-        let mut encrypted_data = Vec::with_capacity(12 + ciphertext.len());
+        let mut encrypted_data = Vec::with_capacity(12 + cipher_text.len());
         encrypted_data.extend_from_slice(nonce.as_slice());
-        encrypted_data.extend_from_slice(&ciphertext);
+        encrypted_data.extend_from_slice(&cipher_text);
 
         encrypted_data
     } else {
