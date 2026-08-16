@@ -111,11 +111,11 @@ impl DecodedPng {
                     let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| anyhow::anyhow!(e))?;
 
                     // Extract nonce (first 12 bytes) and ciphertext (rest)
-                    let nonce = Nonce::from_slice(&data[..12]);
+                    let nonce = Nonce::try_from(&data[..12]).map_err(|e| anyhow::anyhow!(e))?;
                     let ciphertext = &data[12..];
 
                     // Decrypt
-                    cipher.decrypt(nonce, ciphertext).map_err(|e| anyhow::anyhow!(e))?
+                    cipher.decrypt(&nonce, ciphertext).map_err(|e| anyhow::anyhow!(e))?
                 } else {
                     data
                 };
