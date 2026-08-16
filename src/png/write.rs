@@ -15,7 +15,7 @@ use crate::png::constants::*;
 use crate::png::optimization::{choose_best_filter, optimize_alpha_channel, quantize_colors};
 
 impl DecodedPng {
-    pub fn save_optimized(&self, path: &str, compression_level: CompressionLevel, encryption_key: Option<&[u8; 32]>, pb: &ProgressBar) -> Result<()> {
+    pub fn encode_optimized(&self, compression_level: CompressionLevel, encryption_key: Option<&[u8; 32]>, pb: &ProgressBar) -> Result<Vec<u8>> {
         let width = self.info.width as usize;
         let height = self.info.height as usize;
 
@@ -80,9 +80,6 @@ impl DecodedPng {
                 Some(&image_data[prev_start..prev_start + row_bytes])
             };
 
-            //let filter_type = 0u8; // None filter
-            //let filtered_row = apply_filter(filter_type, bytes_per_pixel, row_data, prev_row);
-
             let (filter_type, filtered_row) = choose_best_filter(row_data, prev_row, bytes_per_pixel);
             filtered.push(filter_type);
             filtered.extend_from_slice(&filtered_row);
@@ -116,10 +113,10 @@ impl DecodedPng {
         pb.inc(1);
 
         pb.set_message("Writing image...");
-        let mut file = std::fs::File::create(path).with_context(|| format!("Could not create file {}", path))?;
+        let mut output_bytes = Vec::new();
 
         // Write PNG signature
-        file.write_all(&PNG_SIG)?;
+        output_bytes.write_all(&PNG_SIG)?;
 
         // Write IHDR chunk
         let mut ihdr_data = Vec::new();
@@ -130,15 +127,36 @@ impl DecodedPng {
         ihdr_data.write_u8(0)?; // compression
         ihdr_data.write_u8(0)?; // filter
         ihdr_data.write_u8(0)?; // interlace
-        write_chunk(&mut file, &IHDR, &ihdr_data, None)?;
+        write_chunk(&mut output_bytes, &IHDR, &ihdr_data, None)?;
 
         // Write IDAT chunk
-        write_chunk(&mut file, &IDAT, &compressed, encryption_key)?;
+        write_chunk(&mut output_bytes, &IDAT, &compressed, encryption_key)?;
 
         // Write IEND chunk
-        write_chunk(&mut file, &IEND, &[], None)?;
+        write_chunk(&mut output_bytes, &IEND, &[], None)?;
         pb.inc(1);
 
+        Ok(output_bytes)
+    }
+
+    pub async fn save_optimized_async(&self, path: &str, compression_level: CompressionLevel, encryption_key: Option<[u8; 32]>, pb: &ProgressBar) -> Result<()> {
+        let this = self.clone();
+        let pb_clone = pb.clone();
+        let encoded_bytes = smol::unblock(move || {
+            this.encode_optimized(compression_level, encryption_key.as_ref(), &pb_clone)
+        }).await?;
+
+        smol::fs::write(path, &encoded_bytes)
+            .await
+            .with_context(|| format!("Could not write file {}", path))?;
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub fn save_optimized(&self, path: &str, compression_level: CompressionLevel, encryption_key: Option<&[u8; 32]>, pb: &ProgressBar) -> Result<()> {
+        let encoded_bytes = self.encode_optimized(compression_level, encryption_key, pb)?;
+        let mut file = std::fs::File::create(path).with_context(|| format!("Could not create file {}", path))?;
+        file.write_all(&encoded_bytes)?;
         Ok(())
     }
 }

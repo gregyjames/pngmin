@@ -1,6 +1,6 @@
 use clap::ValueEnum;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImageType {
     Grayscale,
     Truecolor,
@@ -17,7 +17,8 @@ pub enum CompressionLevel{
     Maximum
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct PngInfo {
     pub width: u32,
     pub height: u32,
@@ -28,6 +29,7 @@ pub struct PngInfo {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
 pub struct Pixel {
     pub red: u8,
     pub green: u8,
@@ -35,7 +37,7 @@ pub struct Pixel {
     pub alpha: u8,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DecodedPng {
     pub info: PngInfo,
     pub rgba: Vec<u8>,

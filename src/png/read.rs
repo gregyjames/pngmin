@@ -11,6 +11,7 @@ use crate::png::filter::unfilter_row;
 use crate::png::parse_image_type;
 
 impl DecodedPng {
+    #[allow(dead_code)]
     pub fn get(&self, x: u32, y: u32) -> Pixel {
         let w = self.info.width as usize;
         let x = x as usize;
@@ -26,16 +27,28 @@ impl DecodedPng {
             alpha: self.rgba[base + 3],
         }
     }
+    pub async fn read_from_file_async(path: &str, decryption_key: Option<[u8; 32]>, pb: &ProgressBar) -> Result<DecodedPng> {
+        pb.set_message(format!("Reading image {}", path));
+        let bytes = smol::fs::read(path).await.with_context(|| format!("Could not read file {}", path))?;
+        let pb_clone = pb.clone();
+        smol::unblock(move || {
+            Self::from_bytes(&bytes, decryption_key.as_ref(), &pb_clone)
+        }).await
+    }
+
+    #[allow(dead_code)]
     pub fn read_from_file(path: &str, decryption_key: Option<&[u8; 32]>, pb: &ProgressBar) -> Result<DecodedPng> {
         pb.set_message(format!("Reading image {}", path));
         let mut file = std::fs::File::open(path).with_context(|| format!("Could not open file {}", path))?;
-
         let mut bytes: Vec<u8> = Vec::new();
         file.read_to_end(&mut bytes).with_context(|| format!("Could not read file {}", path))?;
+        Self::from_bytes(&bytes, decryption_key, pb)
+    }
 
+    pub fn from_bytes(bytes: &[u8], decryption_key: Option<&[u8; 32]>, pb: &ProgressBar) -> Result<DecodedPng> {
         let mut cursor = Cursor::new(bytes);
         let mut signature: [u8; 8] = [0u8; 8];
-        cursor.read_exact(&mut signature).map_err(|e| e.to_string()).unwrap();
+        cursor.read_exact(&mut signature).map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         if signature != PNG_SIG {
             bail!("Signature doesn't match PNG signature");

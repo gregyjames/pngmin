@@ -14,3 +14,5 @@ rand = "0.9.3"
 clap = { version = "4", features = ["derive"] }
 indicatif = "0.18"
 argon2 = "0.5"
+smol = "2.0.2"
+futures-lite = "2"
