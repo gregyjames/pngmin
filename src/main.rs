@@ -1,10 +1,10 @@
 use crate::png::{CompressionLevel, DecodedPng};
-use anyhow::bail;
+use anyhow::{bail, Context};
 use argon2::{Algorithm, Argon2, ParamsBuilder, Version};
 use clap::Parser;
 use futures_lite::stream::StreamExt;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use rand::RngCore;
+use rand::{TryRng};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -52,7 +52,7 @@ impl KeyObject {
             Some(s) => *s,
             None => {
                 let mut s = [0u8; 16];
-                rand::rng().fill_bytes(&mut s);
+                rand::rng().try_fill_bytes(&mut s).context("failed to generate salt").unwrap();
                 s
             }
         };
