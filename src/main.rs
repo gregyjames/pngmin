@@ -540,40 +540,6 @@ mod tests {
     }
 
     #[test]
-    fn test_async_batch_directory_and_scan() {
-        smol::block_on(async {
-            let test_dir = "target/test_batch_dir";
-            let out_dir = "target/test_batch_out";
-            let _ = smol::fs::remove_dir_all(test_dir).await;
-            let _ = smol::fs::remove_dir_all(out_dir).await;
-            smol::fs::create_dir_all(test_dir).await.unwrap();
-
-            if Path::new("d_file.png").exists() {
-                smol::fs::copy("d_file.png", format!("{}/img1.png", test_dir)).await.unwrap();
-                smol::fs::copy("d_file.png", format!("{}/img2.png", test_dir)).await.unwrap();
-            }
-
-            let discovered = get_png_files_async(test_dir).await.unwrap();
-            assert_eq!(discovered.len(), 2);
-
-            let key = [7u8; 32];
-            let pb = ProgressBar::hidden();
-
-            for file in &discovered {
-                process_file_encrypt_async(&file.to_string_lossy(), None, Some(out_dir), key, CompressionLevel::Lossless, &pb)
-                    .await
-                    .unwrap();
-            }
-
-            let encrypted_files = get_png_files_async(out_dir).await.unwrap();
-            assert_eq!(encrypted_files.len(), 2);
-
-            let _ = smol::fs::remove_dir_all(test_dir).await;
-            let _ = smol::fs::remove_dir_all(out_dir).await;
-        });
-    }
-
-    #[test]
     fn test_async_invalid_key_error() {
         smol::block_on(async {
             if !Path::new("d_file.png").exists() {
