@@ -12,7 +12,7 @@ use zopfli::{compress, Format, Options};
 
 use crate::png::types::*;
 use crate::png::constants::*;
-use crate::png::optimization::{choose_best_filter_into, optimize_alpha_channel, quantize_colors};
+use crate::png::optimization::{choose_best_filter_into, optimize_alpha_channel, quantize_colors, try_build_palette};
 
 impl DecodedPng {
     pub fn encode_optimized(&self, compression_level: CompressionLevel, encryption: Option<&EncryptionKey>, pb: &ProgressBar) -> Result<Vec<u8>> {
@@ -34,30 +34,36 @@ impl DecodedPng {
 
         let optimized_rgba = optimize_alpha_channel(quantized_rgba);
 
-        let has_alpha = optimized_rgba.chunks_exact(4).any(|pixel| pixel[3] != 255);
+        let palette_data = try_build_palette(&optimized_rgba);
 
         pb.inc(1);
 
-        let (color_type, bytes_per_pixel) = if has_alpha {
-            (6u8, 4usize) // RGBA
-        } else {
-            (2u8, 3usize) // RGB
-        };
+        let (color_type, bytes_per_pixel, image_data, plte_trns) =
+            if let Some((plte, trns, indices)) = palette_data {
+                (3u8, 1usize, indices, Some((plte, trns)))
+            } else {
+                let has_alpha = optimized_rgba.chunks_exact(4).any(|pixel| pixel[3] != 255);
+                let (ct, bpp) = if has_alpha {
+                    (6u8, 4usize) // RGBA
+                } else {
+                    (2u8, 3usize) // RGB
+                };
+                let mut data = Vec::with_capacity(height * width * bpp);
+                for y in 0..height {
+                    for x in 0..width {
+                        let idx = (y * width + x) * 4;
+                        data.push(optimized_rgba[idx]);     // R
+                        data.push(optimized_rgba[idx + 1]); // G
+                        data.push(optimized_rgba[idx + 2]); // B
+                        if bpp == 4 {
+                            data.push(optimized_rgba[idx + 3]); // A
+                        }
+                    }
+                }
+                (ct, bpp, data, None)
+            };
 
         let row_bytes = width * bytes_per_pixel;
-        let mut image_data = Vec::with_capacity(height * row_bytes);
-
-        for y in 0..height {
-            for x in 0..width {
-                let idx = (y * width + x) * 4;
-                image_data.push(optimized_rgba[idx]);     // R
-                image_data.push(optimized_rgba[idx + 1]); // G
-                image_data.push(optimized_rgba[idx + 2]); // B
-                if bytes_per_pixel == 4 {
-                    image_data.push(optimized_rgba[idx + 3]); // A
-                }
-            }
-        }
 
         // Apply filters and build filtered scanlines
         pb.set_message("Applying optimal filters...");
@@ -124,6 +130,14 @@ impl DecodedPng {
         ihdr_data.write_u8(0)?; // filter
         ihdr_data.write_u8(0)?; // interlace
         write_chunk(&mut output_bytes, &IHDR, &ihdr_data, None)?;
+
+        // Write PLTE (and optional tRNS) for indexed-color images
+        if let Some((plte, trns)) = plte_trns {
+            write_chunk(&mut output_bytes, &PLTE, &plte, None)?;
+            if !trns.is_empty() {
+                write_chunk(&mut output_bytes, &TRNS, &trns, None)?;
+            }
+        }
 
         // Write pnGm salt chunk if encrypting
         if let Some(enc) = encryption {
@@ -224,6 +238,56 @@ mod tests {
             .unwrap();
         let decoded = DecodedPng::from_bytes(&encoded, None, &pb).unwrap();
 
+        assert_eq!(decoded.info.color_type, 3);
         assert_eq!(decoded.rgba, vec![0, 0, 0, 0, 10, 20, 30, 128]);
+    }
+
+    #[test]
+    fn test_auto_plte_opaque_and_fallback_over_256_colors() {
+        let pb = ProgressBar::hidden();
+
+        // Exactly 256 unique opaque colors -> indexed (color_type = 3)
+        let mut rgba_256 = Vec::with_capacity(256 * 4);
+        for i in 0..=255u8 {
+            rgba_256.extend_from_slice(&[i, i.wrapping_mul(3), 42, 255]);
+        }
+        let img_256 = DecodedPng {
+            info: PngInfo {
+                width: 16,
+                height: 16,
+                bit_depth: 8,
+                color_type: 6,
+                interlace: 0,
+                image_type: ImageType::TruecolorAlpha,
+            },
+            rgba: rgba_256.clone(),
+        };
+        let enc_256 = img_256
+            .encode_optimized(CompressionLevel::Lossless, None, &pb)
+            .unwrap();
+        let dec_256 = DecodedPng::from_bytes(&enc_256, None, &pb).unwrap();
+        assert_eq!(dec_256.info.color_type, 3);
+        assert_eq!(dec_256.rgba, rgba_256);
+
+        // 257 unique opaque colors -> falls back to RGB (color_type = 2)
+        let mut rgba_257 = rgba_256;
+        rgba_257.extend_from_slice(&[1, 2, 3, 255]);
+        let img_257 = DecodedPng {
+            info: PngInfo {
+                width: 257,
+                height: 1,
+                bit_depth: 8,
+                color_type: 6,
+                interlace: 0,
+                image_type: ImageType::TruecolorAlpha,
+            },
+            rgba: rgba_257.clone(),
+        };
+        let enc_257 = img_257
+            .encode_optimized(CompressionLevel::Lossless, None, &pb)
+            .unwrap();
+        let dec_257 = DecodedPng::from_bytes(&enc_257, None, &pb).unwrap();
+        assert_eq!(dec_257.info.color_type, 2);
+        assert_eq!(dec_257.rgba, rgba_257);
     }
 }

@@ -4,3 +4,5 @@ pub const IHDR: [u8; 4] = [0x49, 0x48, 0x44, 0x52];
 pub const IDAT: [u8; 4] = [0x49, 0x44, 0x41, 0x54];
 pub const IEND: [u8; 4] = [0x49, 0x45, 0x4e, 0x44];
 pub const PNGM: [u8; 4] = *b"pnGm";
+pub const PLTE: [u8; 4] = *b"PLTE";
+pub const TRNS: [u8; 4] = *b"tRNS";

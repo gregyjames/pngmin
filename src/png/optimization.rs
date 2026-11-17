@@ -72,6 +72,44 @@ fn quantize_channel(value: u8, shift: u8, max_q: u16) -> u8 {
     ((q * 255) / max_q) as u8
 }
 
+/// Attempts to build an indexed palette (color type 3) if the image has at most 256 unique RGBA colors.
+/// Returns `(plte_rgb_bytes, trns_alpha_bytes, pixel_indices)` or `None` if > 256 unique colors.
+pub fn try_build_palette(rgba: &[u8]) -> Option<(Vec<u8>, Vec<u8>, Vec<u8>)> {
+    use std::collections::HashMap;
+
+    let mut color_to_idx: HashMap<[u8; 4], u8> = HashMap::new();
+    let mut plte = Vec::new();
+    let mut alphas = Vec::new();
+    let mut indices = Vec::with_capacity(rgba.len() / 4);
+
+    for chunk in rgba.chunks_exact(4) {
+        let pixel = [chunk[0], chunk[1], chunk[2], chunk[3]];
+        let idx = if let Some(&existing) = color_to_idx.get(&pixel) {
+            existing
+        } else {
+            if alphas.len() >= 256 {
+                return None;
+            }
+            let new_idx = alphas.len() as u8;
+            color_to_idx.insert(pixel, new_idx);
+            plte.extend_from_slice(&pixel[0..3]);
+            alphas.push(pixel[3]);
+            new_idx
+        };
+        indices.push(idx);
+    }
+
+    if alphas.is_empty() {
+        return None;
+    }
+
+    while alphas.last() == Some(&255) {
+        alphas.pop();
+    }
+
+    Some((plte, alphas, indices))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
