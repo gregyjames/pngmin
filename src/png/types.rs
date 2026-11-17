@@ -37,8 +37,17 @@ pub struct Pixel {
     pub alpha: u8,
 }
 
+use zeroize::{Zeroize, ZeroizeOnDrop};
+
 #[derive(Debug, Clone)]
 pub struct DecodedPng {
     pub info: PngInfo,
     pub rgba: Vec<u8>,
+}
+
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
+pub struct EncryptionKey {
+    pub key: [u8; 32],
+    #[zeroize(skip)]
+    pub salt: [u8; 16],
 }
