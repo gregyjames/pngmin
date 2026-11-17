@@ -32,14 +32,7 @@ impl DecodedPng {
             }
         };
 
-        let optimized_rgba = match compression_level {
-            CompressionLevel::Lossless => {
-                &self.rgba[..]
-            },
-            CompressionLevel::Balanced | CompressionLevel::Maximum => {
-                &optimize_alpha_channel(quantized_rgba)
-            }
-        };
+        let optimized_rgba = optimize_alpha_channel(quantized_rgba);
 
         let has_alpha = optimized_rgba.chunks_exact(4).any(|pixel| pixel[3] != 255);
 
@@ -98,12 +91,7 @@ impl DecodedPng {
         let mut compressed = Vec::new();
 
         match compression_level {
-            CompressionLevel::Lossless => {
-                let mut encoder = ZlibEncoder::new(Vec::new(), Compression::fast());
-                encoder.write_all(&filtered)?;
-                compressed = encoder.finish()?;
-            },
-            CompressionLevel::Balanced => {
+            CompressionLevel::Lossless | CompressionLevel::Balanced => {
                 let mut encoder = ZlibEncoder::new(Vec::new(), Compression::best());
                 encoder.write_all(&filtered)?;
                 compressed = encoder.finish()?;
@@ -207,4 +195,35 @@ pub fn write_chunk(writer: &mut impl Write, chunk_type: &[u8; 4], data: &[u8], e
     writer.write_u32::<BigEndian>(crc)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_lossless_optimizes_transparent_pixels_and_preserves_visible() {
+        let img = DecodedPng {
+            info: PngInfo {
+                width: 2,
+                height: 1,
+                bit_depth: 8,
+                color_type: 6,
+                interlace: 0,
+                image_type: ImageType::TruecolorAlpha,
+            },
+            rgba: vec![
+                123, 45, 67, 0,   // fully transparent: RGB should be zeroed
+                10, 20, 30, 128,  // semi-transparent: preserved exactly
+            ],
+        };
+
+        let pb = ProgressBar::hidden();
+        let encoded = img
+            .encode_optimized(CompressionLevel::Lossless, None, &pb)
+            .unwrap();
+        let decoded = DecodedPng::from_bytes(&encoded, None, &pb).unwrap();
+
+        assert_eq!(decoded.rgba, vec![0, 0, 0, 0, 10, 20, 30, 128]);
+    }
 }
