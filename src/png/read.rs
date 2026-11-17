@@ -58,6 +58,8 @@ impl DecodedPng {
         let mut info: Option<PngInfo> = None;
         let mut salt: Option<[u8; 16]> = None;
         let mut derived_key: Option<EncryptionKey> = None;
+        let mut palette: Option<Vec<[u8; 3]>> = None;
+        let mut trns_alphas: Vec<u8> = Vec::new();
         let mut idat_data: Vec<u8> = Vec::new();
 
         loop {
@@ -96,8 +98,8 @@ impl DecodedPng {
                 if bit_depth != 8 {
                     bail!("Only 8-bit PNG supported in this minimal decoder");
                 }
-                if color_type != 2 && color_type != 6 {
-                    bail!("Only color types 2 (RGB) and 6 (RGBA) supported");
+                if color_type != 2 && color_type != 3 && color_type != 6 {
+                    bail!("Only color types 2 (RGB), 3 (Indexed), and 6 (RGBA) supported");
                 }
                 info = Some(PngInfo{
                     width,
@@ -107,6 +109,19 @@ impl DecodedPng {
                     interlace,
                     image_type: parse_image_type(color_type, bit_depth)
                 })
+            }
+            else if chunk_type == PLTE {
+                if data.is_empty() || data.len() % 3 != 0 || data.len() > 256 * 3 {
+                    bail!("Invalid PLTE chunk length: {}", data.len());
+                }
+                palette = Some(
+                    data.chunks_exact(3)
+                        .map(|c| [c[0], c[1], c[2]])
+                        .collect(),
+                );
+            }
+            else if chunk_type == TRNS {
+                trns_alphas = data;
             }
             else if chunk_type == PNGM {
                 if data.len() != 16 {
@@ -159,6 +174,7 @@ impl DecodedPng {
         let bytes_per_pixel = match info.image_type {
             ImageType::TruecolorAlpha => 4, // RGBA
             ImageType::Truecolor => 3,      // RGB
+            ImageType::IndexedColor => 1,   // Palette index
             _ => panic!("Unsupported color type")
         };
 
@@ -209,6 +225,16 @@ impl DecodedPng {
             },
             ImageType::TruecolorAlpha => {
                 rgba = unfiltered;
+            },
+            ImageType::IndexedColor => {
+                let pal = palette.ok_or_else(|| anyhow::anyhow!("Indexed PNG is missing PLTE chunk"))?;
+                for &idx in &unfiltered {
+                    let [r, g, b] = *pal
+                        .get(idx as usize)
+                        .ok_or_else(|| anyhow::anyhow!("Palette index {} out of range", idx))?;
+                    let a = trns_alphas.get(idx as usize).copied().unwrap_or(255);
+                    rgba.extend_from_slice(&[r, g, b, a]);
+                }
             },
             _ => unreachable!()
         }
