@@ -1,53 +1,61 @@
 // Basically the opposite of the method below lol https://www.w3.org/TR/png-3/#9Filters
+#[allow(dead_code)]
 pub fn apply_filter(filter_type: u8, bytes_per_pixel: usize, row: &[u8], prev_row: Option<&[u8]>) -> Vec<u8> {
+    let mut out = Vec::with_capacity(row.len());
+    apply_filter_into(filter_type, bytes_per_pixel, row, prev_row, &mut out);
+    out
+}
+
+pub fn apply_filter_into(
+    filter_type: u8,
+    bytes_per_pixel: usize,
+    row: &[u8],
+    prev_row: Option<&[u8]>,
+    out: &mut Vec<u8>,
+) {
+    out.clear();
+    out.reserve(row.len());
+
     match filter_type {
         0 => {
             // None: Filt(x) = Orig(x)
-            row.to_vec()
+            out.extend_from_slice(row);
         },
         1 => {
             // Sub: Filt(x) = Orig(x) - Orig(a)
-            let mut filtered = Vec::with_capacity(row.len());
             for i in 0..row.len() {
                 let left = if i >= bytes_per_pixel { row[i - bytes_per_pixel] } else { 0 };
-                filtered.push(row[i].wrapping_sub(left));
+                out.push(row[i].wrapping_sub(left));
             }
-            filtered
         },
         2 => {
             // Up: Filt(x) = Orig(x) - Orig(b)
             let prev = prev_row.unwrap_or(&[]);
-            let mut filtered = Vec::with_capacity(row.len());
             for i in 0..row.len() {
                 let up = if i < prev.len() { prev[i] } else { 0 };
-                filtered.push(row[i].wrapping_sub(up));
+                out.push(row[i].wrapping_sub(up));
             }
-            filtered
         },
         3 => {
             // Average: Filt(x) = Orig(x) - floor((Orig(a) + Orig(b)) / 2)
             let prev = prev_row.unwrap_or(&[]);
-            let mut filtered = Vec::with_capacity(row.len());
             for i in 0..row.len() {
                 let left = if i >= bytes_per_pixel { row[i - bytes_per_pixel] } else { 0 };
                 let up = if i < prev.len() { prev[i] } else { 0 };
                 let avg = ((left as u16 + up as u16) / 2) as u8;
-                filtered.push(row[i].wrapping_sub(avg));
+                out.push(row[i].wrapping_sub(avg));
             }
-            filtered
         },
         4 => {
             // Paeth: Filt(x) = Orig(x) - PaethPredictor(Orig(a), Orig(b), Orig(c))
             let prev = prev_row.unwrap_or(&[]);
-            let mut filtered = Vec::with_capacity(row.len());
             for i in 0..row.len() {
                 let left = if i >= bytes_per_pixel { row[i - bytes_per_pixel] } else { 0 };
                 let up = if i < prev.len() { prev[i] } else { 0 };
                 let top_left = if i >= bytes_per_pixel && i < prev.len() { prev[i - bytes_per_pixel] } else { 0 };
                 let p = paeth_predictor(left, up, top_left);
-                filtered.push(row[i].wrapping_sub(p));
+                out.push(row[i].wrapping_sub(p));
             }
-            filtered
         },
         _ => {
             panic!("Unsupported filter type: {}", filter_type);

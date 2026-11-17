@@ -12,7 +12,7 @@ use zopfli::{compress, Format, Options};
 
 use crate::png::types::*;
 use crate::png::constants::*;
-use crate::png::optimization::{choose_best_filter, optimize_alpha_channel, quantize_colors};
+use crate::png::optimization::{choose_best_filter_into, optimize_alpha_channel, quantize_colors};
 
 impl DecodedPng {
     pub fn encode_optimized(&self, compression_level: CompressionLevel, encryption_key: Option<&[u8; 32]>, pb: &ProgressBar) -> Result<Vec<u8>> {
@@ -69,6 +69,8 @@ impl DecodedPng {
         // Apply filters and build filtered scanlines
         pb.set_message("Applying optimal filters...");
         let mut filtered = Vec::with_capacity(height * (1 + row_bytes));
+        let mut best_row = Vec::with_capacity(row_bytes);
+        let mut candidate_row = Vec::with_capacity(row_bytes);
         for row in 0..height {
             let row_start = row * row_bytes;
             let row_data = &image_data[row_start..row_start + row_bytes];
@@ -80,9 +82,15 @@ impl DecodedPng {
                 Some(&image_data[prev_start..prev_start + row_bytes])
             };
 
-            let (filter_type, filtered_row) = choose_best_filter(row_data, prev_row, bytes_per_pixel);
+            let filter_type = choose_best_filter_into(
+                row_data,
+                prev_row,
+                bytes_per_pixel,
+                &mut best_row,
+                &mut candidate_row,
+            );
             filtered.push(filter_type);
-            filtered.extend_from_slice(&filtered_row);
+            filtered.extend_from_slice(&best_row);
         }
         pb.inc(1);
 
