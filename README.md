@@ -15,47 +15,39 @@ Finally thought of a cool use case for this: encryption! Since a PNG is basicall
 ⚠️ WARNING: If you do want to store these images on Google Photos (or similar platforms), you need to update your Google Photos storage mode to **lossless**, since compressing the image would **destroy** the encrypted data. I am **not** responsible for you losing little Timmy's entire childhood using this.
 
 ## Usage
-### Generate a Key
-
-#### Generate a new encryption key from a password:
-The key file contains both the salt and derived key (48 bytes total). Keep this file secure!
-```
-pngmin -g "your-secure-password" -k master-key.bin
-```
+When encrypting or decrypting, `pngmin` prompts for your password interactively (and embeds a random 16-byte Argon2id salt in a `pnGm` PNG chunk—no separate key file needed).
 
 #### Encrypt a single PNG file
 ```
 # Creates image_encrypted.png in the same directory
-pngmin -e -i image.png -k master-key.bin
+pngmin -e -i image.png
 
 # Encrypt with custom output filename
-pngmin -e -i image.png -k master-key.bin -o encrypted-image.png
+pngmin -e -i image.png -o encrypted-image.png
 ```
 
 #### Decrypt a single PNG file
 ```
 # Decrypt a PNG file (creates image_decrypted.png in the same directory)
-pngmin -d -i image_encrypted.png -k master-key.bin
+pngmin -d -i image_encrypted.png
 
 # Decrypt with custom output filename
-pngmin -d -i image_encrypted.png -k master-key.bin -o decrypted-image.png
+pngmin -d -i image_encrypted.png -o decrypted-image.png
 ```
 
 #### Encrypt/Decrypt Multiple PNG Files 
 ```
 # Encrypt all PNG files and save to a different directory
-pngmin -e --dir ./images -k master-key.bin --out-dir ./encrypted
+pngmin -e --dir ./images --out-dir ./encrypted
 
 
 # Decrypt all PNG files and save to a different directory
-pngmin -d --dir ./encrypted -k master-key.bin --out-dir ./decrypted
+pngmin -d --dir ./encrypted --out-dir ./decrypted
 ```
 
 ## Command reference
 | Flag      | Long Form  | Description                         |
 |-----------|------------|-------------------------------------|
-| -g        | --generate | Generate a key file from a password |
-| -k        | --key      | Path to key file                    |
 | -d        | --decrypt  | Decrypt mode                        |
 | -e        | --encrypt  | Encrypt mode                        |
 | --dir     |            | Input directory                     |
