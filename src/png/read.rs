@@ -84,8 +84,8 @@ impl DecodedPng {
                 let filter = data_cursor.read_u8().with_context(|| "Could not read filter type")?;
                 let interlace = data_cursor.read_u8().with_context(|| "Could not read interlace")?;
 
-                if compression != 0 && filter != 0 {
-                    bail!("Unsupported compression format for image data.");
+                if compression != 0 || filter != 0 {
+                    bail!("Unsupported compression or filter method in IHDR.");
                 }
                 if interlace != 0 {
                     bail!("Interlaced PNG not supported in this minimal decoder");
@@ -205,5 +205,51 @@ impl DecodedPng {
         };
 
         Ok(image)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use byteorder::WriteBytesExt;
+
+    fn build_minimal_png_with_ihdr(compression: u8, filter: u8) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&PNG_SIG);
+
+        let mut ihdr = Vec::new();
+        ihdr.write_u32::<BigEndian>(1).unwrap();
+        ihdr.write_u32::<BigEndian>(1).unwrap();
+        ihdr.push(8); // bit_depth
+        ihdr.push(6); // color_type RGBA
+        ihdr.push(compression);
+        ihdr.push(filter);
+        ihdr.push(0); // interlace
+
+        out.write_u32::<BigEndian>(ihdr.len() as u32).unwrap();
+        out.extend_from_slice(&IHDR);
+        out.extend_from_slice(&ihdr);
+        out.write_u32::<BigEndian>(0).unwrap(); // dummy CRC
+
+        out.write_u32::<BigEndian>(0).unwrap();
+        out.extend_from_slice(&IEND);
+        out.write_u32::<BigEndian>(0).unwrap();
+        out
+    }
+
+    #[test]
+    fn test_ihdr_rejects_invalid_filter_when_compression_is_zero() {
+        let png = build_minimal_png_with_ihdr(0, 1);
+        let pb = ProgressBar::hidden();
+        let err = DecodedPng::from_bytes(&png, None, &pb).unwrap_err();
+        assert!(err.to_string().contains("compression or filter"));
+    }
+
+    #[test]
+    fn test_ihdr_rejects_invalid_compression_when_filter_is_zero() {
+        let png = build_minimal_png_with_ihdr(1, 0);
+        let pb = ProgressBar::hidden();
+        let err = DecodedPng::from_bytes(&png, None, &pb).unwrap_err();
+        assert!(err.to_string().contains("compression or filter"));
     }
 }
