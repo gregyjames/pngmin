@@ -1,11 +1,4 @@
 // Basically the opposite of the method below lol https://www.w3.org/TR/png-3/#9Filters
-#[allow(dead_code)]
-pub fn apply_filter(filter_type: u8, bytes_per_pixel: usize, row: &[u8], prev_row: Option<&[u8]>) -> Vec<u8> {
-    let mut out = Vec::with_capacity(row.len());
-    apply_filter_into(filter_type, bytes_per_pixel, row, prev_row, &mut out);
-    out
-}
-
 pub fn apply_filter_into(
     filter_type: u8,
     bytes_per_pixel: usize,

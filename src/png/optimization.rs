@@ -22,14 +22,6 @@ fn score_filtered_row(filtered: &[u8]) -> u64 {
         .map(|&b| (b as i8 as i32).abs() as u64)
         .sum()
 }
-#[allow(dead_code)]
-pub fn choose_best_filter(row: &[u8], prev: Option<&[u8]>, bytes_per_pixel: usize) -> (u8, Vec<u8>) {
-    let mut best_buf = Vec::with_capacity(row.len());
-    let mut candidate_buf = Vec::with_capacity(row.len());
-    let best_filter = choose_best_filter_into(row, prev, bytes_per_pixel, &mut best_buf, &mut candidate_buf);
-    (best_filter, best_buf)
-}
-
 pub fn choose_best_filter_into(
     row: &[u8],
     prev: Option<&[u8]>,
@@ -110,11 +102,9 @@ mod tests {
     }
 
     #[test]
-    fn test_choose_best_filter_into_reuses_buffers_and_matches() {
+    fn test_choose_best_filter_into_reuses_buffers() {
         let prev = [10u8, 20, 30, 40, 50, 60, 70, 80];
         let row = [11u8, 21, 31, 41, 51, 61, 71, 81];
-
-        let (expected_filter, expected_bytes) = choose_best_filter(&row, Some(&prev), 4);
 
         let mut best_buf = Vec::with_capacity(row.len());
         let mut candidate_buf = Vec::with_capacity(row.len());
@@ -123,8 +113,9 @@ mod tests {
 
         let filter = choose_best_filter_into(&row, Some(&prev), 4, &mut best_buf, &mut candidate_buf);
 
-        assert_eq!(filter, expected_filter);
-        assert_eq!(best_buf, expected_bytes);
+        // Up filter (2): each byte is prev[i] + 1, so filtered row is all 1s (score = 8).
+        assert_eq!(filter, 2);
+        assert_eq!(best_buf, [1u8; 8]);
         assert_eq!(best_buf.capacity(), cap_best);
         assert_eq!(candidate_buf.capacity(), cap_cand);
     }
