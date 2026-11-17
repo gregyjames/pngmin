@@ -16,3 +16,6 @@ indicatif = "0.18"
 argon2 = "0.6"
 smol = "2.0.2"
 futures-lite = "2"
+
+[profile.dev.package.argon2]
+opt-level = 3
