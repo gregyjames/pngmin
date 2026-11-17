@@ -43,23 +43,55 @@ pub fn choose_best_filter(row: &[u8], prev: Option<&[u8]>, bytes_per_pixel: usiz
 // https://en.wikipedia.org/wiki/Color_depth
 // https://www.geeksforgeeks.org/electronics-engineering/difference-between-uniform-and-non-uniform-quantization/
 pub fn quantize_colors(rgba: &[u8], bits: u8) -> Vec<u8> {
-    let levels = 1u8 << bits; // 2^bits
-    let step = 255 / levels;
-    let max_val = ((levels - 1) * step) as u8;
+    if bits == 0 || bits >= 8 {
+        return rgba.to_vec();
+    }
 
-    rgba.chunks_exact(4).map(|pixel| {
+    let shift = 8 - bits;
+    let max_q = ((1u16 << bits) - 1) as u16;
+
+    rgba.chunks_exact(4).flat_map(|pixel| {
         [
-            quantize_channel(pixel[0], step, max_val),
-            quantize_channel(pixel[1], step, max_val),
-            quantize_channel(pixel[2], step, max_val),
+            quantize_channel(pixel[0], shift, max_q),
+            quantize_channel(pixel[1], shift, max_q),
+            quantize_channel(pixel[2], shift, max_q),
             pixel[3], // Don't quantize alpha
         ]
-    }).flatten().collect()
+    }).collect()
 }
 
 #[inline]
-fn quantize_channel(value: u8, step: u8, max_val: u8) -> u8 {
-    let bin_index = value / step;
-    let quantized = bin_index * step;
-    quantized.min(max_val)
+fn quantize_channel(value: u8, shift: u8, max_q: u16) -> u8 {
+    let q = (value >> shift) as u16;
+    ((q * 255) / max_q) as u8
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_quantize_colors_preserves_black_white_and_alpha() {
+        let input = [
+            0, 0, 0, 0,
+            255, 255, 255, 128,
+            128, 64, 192, 255,
+        ];
+
+        for bits in [4, 6] {
+            let out = quantize_colors(&input, bits);
+            // Black stays black
+            assert_eq!(&out[0..4], &[0, 0, 0, 0]);
+            // Pure white stays pure white (255), alpha preserved
+            assert_eq!(&out[4..8], &[255, 255, 255, 128]);
+            // Alpha preserved on midtones
+            assert_eq!(out[11], 255);
+        }
+    }
+
+    #[test]
+    fn test_quantize_colors_eight_bits_is_lossless() {
+        let input = [12, 34, 56, 78, 255, 0, 127, 200];
+        assert_eq!(quantize_colors(&input, 8), input);
+    }
 }
