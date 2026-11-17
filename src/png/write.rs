@@ -15,7 +15,7 @@ use crate::png::constants::*;
 use crate::png::optimization::{choose_best_filter_into, optimize_alpha_channel, quantize_colors};
 
 impl DecodedPng {
-    pub fn encode_optimized(&self, compression_level: CompressionLevel, encryption_key: Option<&[u8; 32]>, pb: &ProgressBar) -> Result<Vec<u8>> {
+    pub fn encode_optimized(&self, compression_level: CompressionLevel, encryption: Option<&EncryptionKey>, pb: &ProgressBar) -> Result<Vec<u8>> {
         let width = self.info.width as usize;
         let height = self.info.height as usize;
 
@@ -137,8 +137,18 @@ impl DecodedPng {
         ihdr_data.write_u8(0)?; // interlace
         write_chunk(&mut output_bytes, &IHDR, &ihdr_data, None)?;
 
+        // Write pnGm salt chunk if encrypting
+        if let Some(enc) = encryption {
+            write_chunk(&mut output_bytes, &PNGM, &enc.salt, None)?;
+        }
+
         // Write IDAT chunk
-        write_chunk(&mut output_bytes, &IDAT, &compressed, encryption_key)?;
+        write_chunk(
+            &mut output_bytes,
+            &IDAT,
+            &compressed,
+            encryption.map(|enc| &enc.key),
+        )?;
 
         // Write IEND chunk
         write_chunk(&mut output_bytes, &IEND, &[], None)?;
@@ -147,11 +157,11 @@ impl DecodedPng {
         Ok(output_bytes)
     }
 
-    pub async fn save_optimized_async(&self, path: &str, compression_level: CompressionLevel, encryption_key: Option<[u8; 32]>, pb: &ProgressBar) -> Result<()> {
+    pub async fn save_optimized_async(&self, path: &str, compression_level: CompressionLevel, encryption: Option<EncryptionKey>, pb: &ProgressBar) -> Result<()> {
         let this = self.clone();
         let pb_clone = pb.clone();
         let encoded_bytes = smol::unblock(move || {
-            this.encode_optimized(compression_level, encryption_key.as_ref(), &pb_clone)
+            this.encode_optimized(compression_level, encryption.as_ref(), &pb_clone)
         }).await?;
 
         smol::fs::write(path, &encoded_bytes)
@@ -161,8 +171,8 @@ impl DecodedPng {
     }
 
     #[allow(dead_code)]
-    pub fn save_optimized(&self, path: &str, compression_level: CompressionLevel, encryption_key: Option<&[u8; 32]>, pb: &ProgressBar) -> Result<()> {
-        let encoded_bytes = self.encode_optimized(compression_level, encryption_key, pb)?;
+    pub fn save_optimized(&self, path: &str, compression_level: CompressionLevel, encryption: Option<&EncryptionKey>, pb: &ProgressBar) -> Result<()> {
+        let encoded_bytes = self.encode_optimized(compression_level, encryption, pb)?;
         let mut file = std::fs::File::create(path).with_context(|| format!("Could not create file {}", path))?;
         file.write_all(&encoded_bytes)?;
         Ok(())

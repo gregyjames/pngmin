@@ -8,7 +8,8 @@ use indicatif::ProgressBar;
 use crate::png::types::*;
 use crate::png::constants::*;
 use crate::png::filter::unfilter_row;
-use crate::png::parse_image_type;
+use crate::png::{derive_key_from_password, parse_image_type};
+use zeroize::Zeroizing;
 
 impl DecodedPng {
     #[allow(dead_code)]
@@ -27,25 +28,25 @@ impl DecodedPng {
             alpha: self.rgba[base + 3],
         }
     }
-    pub async fn read_from_file_async(path: &str, decryption_key: Option<[u8; 32]>, pb: &ProgressBar) -> Result<DecodedPng> {
+    pub async fn read_from_file_async(path: &str, password: Option<Zeroizing<String>>, pb: &ProgressBar) -> Result<DecodedPng> {
         pb.set_message(format!("Reading image {}", path));
         let bytes = smol::fs::read(path).await.with_context(|| format!("Could not read file {}", path))?;
         let pb_clone = pb.clone();
         smol::unblock(move || {
-            Self::from_bytes(&bytes, decryption_key.as_ref(), &pb_clone)
+            Self::from_bytes(&bytes, password.as_deref().map(String::as_str), &pb_clone)
         }).await
     }
 
     #[allow(dead_code)]
-    pub fn read_from_file(path: &str, decryption_key: Option<&[u8; 32]>, pb: &ProgressBar) -> Result<DecodedPng> {
+    pub fn read_from_file(path: &str, password: Option<&str>, pb: &ProgressBar) -> Result<DecodedPng> {
         pb.set_message(format!("Reading image {}", path));
         let mut file = std::fs::File::open(path).with_context(|| format!("Could not open file {}", path))?;
         let mut bytes: Vec<u8> = Vec::new();
         file.read_to_end(&mut bytes).with_context(|| format!("Could not read file {}", path))?;
-        Self::from_bytes(&bytes, decryption_key, pb)
+        Self::from_bytes(&bytes, password, pb)
     }
 
-    pub fn from_bytes(bytes: &[u8], decryption_key: Option<&[u8; 32]>, pb: &ProgressBar) -> Result<DecodedPng> {
+    pub fn from_bytes(bytes: &[u8], password: Option<&str>, pb: &ProgressBar) -> Result<DecodedPng> {
         let mut cursor = Cursor::new(bytes);
         let mut signature: [u8; 8] = [0u8; 8];
         cursor.read_exact(&mut signature).map_err(|e| anyhow::anyhow!(e.to_string()))?;
@@ -55,6 +56,8 @@ impl DecodedPng {
         }
 
         let mut info: Option<PngInfo> = None;
+        let mut salt: Option<[u8; 16]> = None;
+        let mut derived_key: Option<EncryptionKey> = None;
         let mut idat_data: Vec<u8> = Vec::new();
 
         loop {
@@ -105,9 +108,24 @@ impl DecodedPng {
                     image_type: parse_image_type(color_type, bit_depth)
                 })
             }
+            else if chunk_type == PNGM {
+                if data.len() != 16 {
+                    bail!("Invalid pnGm salt chunk length: expected 16, got {}", data.len());
+                }
+                let mut s = [0u8; 16];
+                s.copy_from_slice(&data);
+                salt = Some(s);
+            }
             else if chunk_type == IDAT{
-                let decrypted_data = if decryption_key.is_some() && data.len() > 12 {
-                    let key = decryption_key.unwrap();
+                let decrypted_data = if let Some(pw) = password {
+                    if data.len() <= 12 {
+                        bail!("Encrypted IDAT chunk is too short");
+                    }
+                    if derived_key.is_none() {
+                        let s = salt.ok_or_else(|| anyhow::anyhow!("Encrypted PNG is missing pnGm salt chunk"))?;
+                        derived_key = Some(derive_key_from_password(pw, Some(&s))?);
+                    }
+                    let key = &derived_key.as_ref().unwrap().key;
                     let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| anyhow::anyhow!(e))?;
 
                     // Extract nonce (first 12 bytes) and ciphertext (rest)

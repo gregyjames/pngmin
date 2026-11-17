@@ -1,13 +1,11 @@
-use crate::png::{CompressionLevel, DecodedPng};
-use anyhow::{bail, Context};
-use argon2::{Algorithm, Argon2, ParamsBuilder, Version};
+use crate::png::{derive_key_from_password, CompressionLevel, DecodedPng, EncryptionKey};
+use anyhow::bail;
 use clap::Parser;
 use futures_lite::stream::StreamExt;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use rand::{TryRng};
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use zeroize::Zeroizing;
 mod png;
 
 #[derive(Parser, Debug)]
@@ -17,12 +15,6 @@ struct Args {
 
     #[arg(long = "dir")]
     directory: Option<String>,
-
-    #[arg(short = 'k', long = "key")]
-    key_path: Option<String>,
-
-    #[arg(short = 'g', long = "generate")]
-    password: Option<String>,
 
     #[arg(short = 'e', long = "encrypt")]
     encrypt: bool,
@@ -40,98 +32,25 @@ struct Args {
     out_dir: Option<String>,
 }
 
-#[derive(Clone)]
-struct KeyObject {
-    key: [u8; 32],
-    salt: [u8; 16],
+async fn derive_key_from_password_async(
+    password: Zeroizing<String>,
+    salt: Option<[u8; 16]>,
+) -> anyhow::Result<EncryptionKey> {
+    smol::unblock(move || derive_key_from_password(&password, salt.as_ref())).await
 }
 
-impl KeyObject {
-    pub fn derive_key_from_password(password: &str, salt: Option<&[u8; 16]>) -> KeyObject {
-        let salt = match salt {
-            Some(s) => *s,
-            None => {
-                let mut s = [0u8; 16];
-                rand::rng().try_fill_bytes(&mut s).context("failed to generate salt").unwrap();
-                s
-            }
-        };
-
-        let params = ParamsBuilder::new()
-            .m_cost(65536)
-            .t_cost(100)
-            .p_cost(4)
-            .output_len(32)
-            .build()
-            .expect("Invalid parameters for Argon2");
-
-        let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
-
-        let mut key = [0u8; 32];
-        argon2
-            .hash_password_into(password.as_bytes(), &salt, &mut key)
-            .expect("Argon2 hashing failed.");
-
-        KeyObject { key, salt }
+fn prompt_password(confirm: bool) -> anyhow::Result<Zeroizing<String>> {
+    let password = Zeroizing::new(rpassword::prompt_password("Enter password: ")?);
+    if password.is_empty() {
+        bail!("Password cannot be empty");
     }
-
-    pub async fn derive_key_from_password_async(
-        password: String,
-        salt: Option<[u8; 16]>,
-    ) -> KeyObject {
-        smol::unblock(move || Self::derive_key_from_password(&password, salt.as_ref())).await
-    }
-
-    #[allow(dead_code)]
-    pub fn save_key_to(&self, key_path: &str) -> anyhow::Result<()> {
-        let mut file = std::fs::File::create(key_path)?;
-        file.write_all(&self.salt)?;
-        file.write_all(&self.key)?;
-        Ok(())
-    }
-
-    pub async fn save_key_to_async(&self, key_path: &str) -> anyhow::Result<()> {
-        let mut data = Vec::with_capacity(48);
-        data.extend_from_slice(&self.salt);
-        data.extend_from_slice(&self.key);
-        smol::fs::write(key_path, &data).await?;
-        Ok(())
-    }
-
-    #[allow(dead_code)]
-    pub fn load_key(key_path: &str) -> anyhow::Result<KeyObject> {
-        let data = std::fs::read(key_path)?;
-        if data.len() != 48 {
-            bail!(
-                "Key file has invalid length (expected 48 bytes, got {})",
-                data.len()
-            );
+    if confirm {
+        let confirm_pw = Zeroizing::new(rpassword::prompt_password("Confirm password: ")?);
+        if password.as_str() != confirm_pw.as_str() {
+            bail!("Passwords do not match");
         }
-
-        let mut salt = [0u8; 16];
-        let mut key = [0u8; 32];
-        salt.copy_from_slice(&data[0..16]);
-        key.copy_from_slice(&data[16..48]);
-
-        Ok(KeyObject { key, salt })
     }
-
-    pub async fn load_key_async(key_path: &str) -> anyhow::Result<KeyObject> {
-        let data = smol::fs::read(key_path).await?;
-        if data.len() != 48 {
-            bail!(
-                "Key file has invalid length (expected 48 bytes, got {})",
-                data.len()
-            );
-        }
-
-        let mut salt = [0u8; 16];
-        let mut key = [0u8; 32];
-        salt.copy_from_slice(&data[0..16]);
-        key.copy_from_slice(&data[16..48]);
-
-        Ok(KeyObject { key, salt })
-    }
+    Ok(password)
 }
 
 async fn get_png_files_async(dir: &str) -> anyhow::Result<Vec<PathBuf>> {
@@ -197,7 +116,7 @@ async fn process_file_encrypt_async(
     input_file: &str,
     output_file: Option<String>,
     out_dir: Option<&str>,
-    key: [u8; 32],
+    encryption: EncryptionKey,
     compression_level: CompressionLevel,
     pb: &ProgressBar,
 ) -> anyhow::Result<()> {
@@ -210,7 +129,7 @@ async fn process_file_encrypt_async(
     }
 
     image
-        .save_optimized_async(&output, compression_level, Some(key), pb)
+        .save_optimized_async(&output, compression_level, Some(encryption), pb)
         .await?;
     Ok(())
 }
@@ -219,10 +138,10 @@ async fn process_file_decrypt_async(
     input_file: &str,
     output_file: Option<String>,
     out_dir: Option<&str>,
-    key: [u8; 32],
+    password: Zeroizing<String>,
     pb: &ProgressBar,
 ) -> anyhow::Result<()> {
-    let image = DecodedPng::read_from_file_async(input_file, Some(key), pb).await?;
+    let image = DecodedPng::read_from_file_async(input_file, Some(password), pb).await?;
 
     let output = output_file.unwrap_or_else(|| get_output_path(input_file, out_dir, "_decrypted"));
 
@@ -241,22 +160,10 @@ const PROGRESS_TEMPLATE: &str = "{spinner:.green} [{elapsed_precise}] {bar:40.cy
 async fn async_main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    if let Some(password) = args.password {
-        let key_path = args
-            .key_path
-            .ok_or_else(|| anyhow::anyhow!("Key path (-k) required when generating key"))?;
-        let key_obj = KeyObject::derive_key_from_password_async(password, None).await;
-        key_obj.save_key_to_async(&key_path).await?;
-        println!("Key generated and saved to: {}", key_path);
-        return Ok(());
-    }
-
     if let Some(dir) = args.directory {
-        let key_obj = if let Some(key_path) = args.key_path {
-            KeyObject::load_key_async(&key_path).await?
-        } else {
-            bail!("Key path (-k) required when processing directory");
-        };
+        if !args.encrypt && !args.decrypt {
+            bail!("Please specify -e (encrypt) or -d (decrypt) when using --dir");
+        }
 
         let png_files = get_png_files_async(&dir).await?;
         let m = MultiProgress::new();
@@ -265,6 +172,13 @@ async fn async_main() -> anyhow::Result<()> {
             println!("No PNG files found in directory: {}", dir);
             return Ok(());
         }
+
+        let password = prompt_password(args.encrypt)?;
+        let batch_enc = if args.encrypt {
+            Some(derive_key_from_password_async(password.clone(), None).await?)
+        } else {
+            None
+        };
 
         println!(
             "Found {} PNG file(s) in directory: {}",
@@ -276,10 +190,6 @@ async fn async_main() -> anyhow::Result<()> {
         if let Some(ref out_dir) = args.out_dir {
             smol::fs::create_dir_all(out_dir).await?;
             println!("Output directory: {}", out_dir);
-        }
-
-        if !args.encrypt && !args.decrypt {
-            bail!("Please specify -e (encrypt) or -d (decrypt) when using --dir");
         }
 
         let num_cpus = std::thread::available_parallelism()
@@ -300,7 +210,8 @@ async fn async_main() -> anyhow::Result<()> {
             let sem_clone = sem.clone();
             let input_file = file_path.to_string_lossy().to_string();
             let out_dir_clone = args.out_dir.clone();
-            let key = key_obj.key;
+            let enc_clone = batch_enc.clone();
+            let pw_clone = password.clone();
             let level = args.compression_level.clone();
 
             tasks.push(smol::spawn(async move {
@@ -310,7 +221,7 @@ async fn async_main() -> anyhow::Result<()> {
                         &input_file,
                         None,
                         out_dir_clone.as_deref(),
-                        key,
+                        enc_clone.expect("encryption key derived"),
                         level,
                         &pb,
                     )
@@ -320,7 +231,7 @@ async fn async_main() -> anyhow::Result<()> {
                         &input_file,
                         None,
                         out_dir_clone.as_deref(),
-                        key,
+                        pw_clone,
                         &pb,
                     )
                     .await
@@ -364,11 +275,8 @@ async fn async_main() -> anyhow::Result<()> {
         let input_file = args
             .input_file
             .ok_or_else(|| anyhow::anyhow!("Input file required when encrypting"))?;
-        let key_obj = if let Some(key_path) = args.key_path {
-            KeyObject::load_key_async(&key_path).await?
-        } else {
-            bail!("Key file required when encrypting");
-        };
+        let password = prompt_password(true)?;
+        let encryption = derive_key_from_password_async(password, None).await?;
 
         let pb = ProgressBar::new(7);
         pb.set_style(
@@ -387,7 +295,7 @@ async fn async_main() -> anyhow::Result<()> {
             &input_file,
             Some(output_file),
             None,
-            key_obj.key,
+            encryption,
             args.compression_level,
             &pb,
         )
@@ -401,11 +309,7 @@ async fn async_main() -> anyhow::Result<()> {
         let input_file = args
             .input_file
             .ok_or_else(|| anyhow::anyhow!("Input file required when decrypting"))?;
-        let key_obj = if let Some(key_path) = args.key_path {
-            KeyObject::load_key_async(&key_path).await?
-        } else {
-            bail!("Key file required when decrypting");
-        };
+        let password = prompt_password(false)?;
 
         let pb = ProgressBar::new(7);
         pb.set_style(
@@ -424,7 +328,7 @@ async fn async_main() -> anyhow::Result<()> {
             &input_file,
             Some(output_file),
             None,
-            key_obj.key,
+            password,
             &pb,
         )
         .await?;
@@ -433,7 +337,7 @@ async fn async_main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    bail!("Please specify one of: -g (generate key), -e (encrypt), or -d (decrypt)");
+    bail!("Please specify -e (encrypt) or -d (decrypt)");
 }
 
 fn main() -> anyhow::Result<()> {
@@ -446,99 +350,71 @@ mod tests {
     use crate::png::{ImageType, PngInfo};
 
     #[test]
-    fn test_async_key_derivation_and_io() {
+    fn test_async_key_derivation_determinism() {
         smol::block_on(async {
-            let password = "test-password-123".to_string();
-            let key_obj = KeyObject::derive_key_from_password_async(password.clone(), None).await;
-            assert_eq!(key_obj.key.len(), 32);
-            assert_eq!(key_obj.salt.len(), 16);
+            let password = Zeroizing::new("test-password-123".to_string());
+            let key1 = derive_key_from_password_async(password.clone(), None)
+                .await
+                .unwrap();
+            assert_eq!(key1.key.len(), 32);
+            assert_eq!(key1.salt.len(), 16);
 
-            let temp_key_path = "target/test_key.bin";
-            key_obj.save_key_to_async(temp_key_path).await.unwrap();
-
-            let loaded_key = KeyObject::load_key_async(temp_key_path).await.unwrap();
-            assert_eq!(key_obj.key, loaded_key.key);
-            assert_eq!(key_obj.salt, loaded_key.salt);
-
-            let _ = smol::fs::remove_file(temp_key_path).await;
+            let key2 = derive_key_from_password_async(password, Some(key1.salt))
+                .await
+                .unwrap();
+            assert_eq!(key1.key, key2.key);
+            assert_eq!(key1.salt, key2.salt);
         });
     }
 
-    #[test]
-    fn test_async_image_roundtrip() {
-        smol::block_on(async {
-            if !Path::new("d_file.png").exists() {
-                return;
+    fn make_test_image() -> DecodedPng {
+        let width = 16u32;
+        let height = 16u32;
+        let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+        for y in 0..height {
+            for x in 0..width {
+                rgba.extend_from_slice(&[x as u8 * 16, y as u8 * 16, 128, 255]);
             }
-            let pb = ProgressBar::hidden();
-            let key_obj = KeyObject::derive_key_from_password_async("png-secret".to_string(), None).await;
-
-            let enc_path = "target/test_enc.png";
-            let dec_path = "target/test_dec.png";
-
-            process_file_encrypt_async("d_file.png", Some(enc_path.to_string()), None, key_obj.key, CompressionLevel::Lossless, &pb)
-                .await
-                .unwrap();
-
-            process_file_decrypt_async(enc_path, Some(dec_path.to_string()), None, key_obj.key, &pb)
-                .await
-                .unwrap();
-
-            let orig = DecodedPng::read_from_file_async("d_file.png", None, &pb).await.unwrap();
-            let dec = DecodedPng::read_from_file_async(dec_path, None, &pb).await.unwrap();
-
-            assert_eq!(orig.info.width, dec.info.width);
-            assert_eq!(orig.info.height, dec.info.height);
-            assert_eq!(orig.rgba, dec.rgba);
-
-            let _ = smol::fs::remove_file(enc_path).await;
-            let _ = smol::fs::remove_file(dec_path).await;
-        });
+        }
+        DecodedPng {
+            info: PngInfo {
+                width,
+                height,
+                bit_depth: 8,
+                color_type: 6,
+                interlace: 0,
+                image_type: ImageType::TruecolorAlpha,
+            },
+            rgba,
+        }
     }
 
     #[test]
-    fn test_async_compression_levels() {
+    fn test_async_compression_levels_with_embedded_salt() {
         smol::block_on(async {
-            let width = 16u32;
-            let height = 16u32;
-            let mut rgba = Vec::with_capacity((width * height * 4) as usize);
-            for y in 0..height {
-                for x in 0..width {
-                    rgba.extend_from_slice(&[x as u8 * 16, y as u8 * 16, 128, 255]);
-                }
-            }
-
-            let test_image = DecodedPng {
-                info: PngInfo {
-                    width,
-                    height,
-                    bit_depth: 8,
-                    color_type: 6,
-                    interlace: 0,
-                    image_type: ImageType::TruecolorAlpha,
-                },
-                rgba,
-            };
-
+            let test_image = make_test_image();
             let pb = ProgressBar::hidden();
-            let key = [42u8; 32];
+            let password = Zeroizing::new("png-secret".to_string());
+            let enc = derive_key_from_password_async(password.clone(), None)
+                .await
+                .unwrap();
 
             for level in [CompressionLevel::Lossless, CompressionLevel::Balanced, CompressionLevel::Maximum] {
                 let enc_path = format!("target/test_level_{:?}_enc.png", level);
                 let dec_path = format!("target/test_level_{:?}_dec.png", level);
 
                 test_image
-                    .save_optimized_async(&enc_path, level.clone(), Some(key), &pb)
+                    .save_optimized_async(&enc_path, level.clone(), Some(enc.clone()), &pb)
                     .await
                     .unwrap();
 
-                process_file_decrypt_async(&enc_path, Some(dec_path.clone()), None, key, &pb)
+                process_file_decrypt_async(&enc_path, Some(dec_path.clone()), None, password.clone(), &pb)
                     .await
                     .unwrap();
 
                 let dec = DecodedPng::read_from_file_async(&dec_path, None, &pb).await.unwrap();
-                assert_eq!(dec.info.width, width);
-                assert_eq!(dec.info.height, height);
+                assert_eq!(dec.info.width, test_image.info.width);
+                assert_eq!(dec.info.height, test_image.info.height);
 
                 let _ = smol::fs::remove_file(&enc_path).await;
                 let _ = smol::fs::remove_file(&dec_path).await;
@@ -547,25 +423,43 @@ mod tests {
     }
 
     #[test]
-    fn test_async_invalid_key_error() {
+    fn test_async_invalid_password_error() {
         smol::block_on(async {
-            if !Path::new("d_file.png").exists() {
-                return;
-            }
+            let test_image = make_test_image();
             let pb = ProgressBar::hidden();
-            let key1 = [1u8; 32];
-            let key2 = [2u8; 32];
-
-            let enc_path = "target/test_bad_key_enc.png";
-            process_file_encrypt_async("d_file.png", Some(enc_path.to_string()), None, key1, CompressionLevel::Lossless, &pb)
+            let enc = derive_key_from_password_async(Zeroizing::new("correct-pw".to_string()), None)
                 .await
                 .unwrap();
 
-            // Attempt decrypting with wrong key
-            let res = DecodedPng::read_from_file_async(enc_path, Some(key2), &pb).await;
+            let enc_path = "target/test_bad_pw_enc.png";
+            test_image
+                .save_optimized_async(enc_path, CompressionLevel::Lossless, Some(enc), &pb)
+                .await
+                .unwrap();
+
+            let res = DecodedPng::read_from_file_async(
+                enc_path,
+                Some(Zeroizing::new("wrong-pw".to_string())),
+                &pb,
+            )
+            .await;
             assert!(res.is_err());
 
             let _ = smol::fs::remove_file(enc_path).await;
+        });
+    }
+
+    #[test]
+    fn test_decrypt_unencrypted_png_fails_without_salt_chunk() {
+        smol::block_on(async {
+            let test_image = make_test_image();
+            let pb = ProgressBar::hidden();
+            let plain_bytes = test_image
+                .encode_optimized(CompressionLevel::Lossless, None, &pb)
+                .unwrap();
+
+            let res = DecodedPng::from_bytes(&plain_bytes, Some("any-pw"), &pb);
+            assert!(res.is_err());
         });
     }
 
