@@ -161,6 +161,13 @@ async fn get_png_files_async(dir: &str) -> anyhow::Result<Vec<PathBuf>> {
     Ok(png_files)
 }
 
+fn strip_png_extension(name: &str) -> &str {
+    name.get(name.len().saturating_sub(4)..)
+        .filter(|ext| ext.eq_ignore_ascii_case(".png"))
+        .map(|_| &name[..name.len() - 4])
+        .unwrap_or(name)
+}
+
 fn get_output_path(input_path: &str, out_dir: Option<&str>, suffix: &str) -> String {
     let input_path = Path::new(input_path);
     let file_name = input_path
@@ -168,7 +175,7 @@ fn get_output_path(input_path: &str, out_dir: Option<&str>, suffix: &str) -> Str
         .and_then(|n| n.to_str())
         .unwrap_or("output.png");
 
-    let base_name = file_name.trim_end_matches(".png");
+    let base_name = strip_png_extension(file_name);
     let new_name = format!("{}{}.png", base_name, suffix);
 
     if let Some(out_dir) = out_dir {
@@ -373,7 +380,7 @@ async fn async_main() -> anyhow::Result<()> {
         let output_file = if args.outfile.is_some() {
             args.outfile.unwrap()
         } else {
-            format!("{}_encrypted.png", input_file.trim_end_matches(".png"))
+            format!("{}_encrypted.png", strip_png_extension(&input_file))
         };
 
         process_file_encrypt_async(
@@ -410,7 +417,7 @@ async fn async_main() -> anyhow::Result<()> {
         let output_file = if args.outfile.is_some() {
             args.outfile.unwrap()
         } else {
-            format!("{}_decrypted.png", input_file.trim_end_matches(".png"))
+            format!("{}_decrypted.png", strip_png_extension(&input_file))
         };
 
         process_file_decrypt_async(
@@ -560,5 +567,28 @@ mod tests {
 
             let _ = smol::fs::remove_file(enc_path).await;
         });
+    }
+
+    #[test]
+    fn test_strip_png_extension_case_insensitive() {
+        assert_eq!(strip_png_extension("image.png"), "image");
+        assert_eq!(strip_png_extension("image.PNG"), "image");
+        assert_eq!(strip_png_extension("image.Png"), "image");
+        assert_eq!(strip_png_extension("image.png.png"), "image.png");
+        assert_eq!(strip_png_extension("no_ext"), "no_ext");
+        assert_eq!(strip_png_extension("café.PNG"), "café");
+        assert_eq!(strip_png_extension("😀"), "😀");
+    }
+
+    #[test]
+    fn test_get_output_path_handles_uppercase_png() {
+        assert_eq!(
+            get_output_path("/tmp/photo.PNG", None, "_encrypted"),
+            "/tmp/photo_encrypted.png"
+        );
+        assert_eq!(
+            get_output_path("/tmp/photo.Png", Some("/out"), "_decrypted"),
+            "/out/photo_decrypted.png"
+        );
     }
 }
