@@ -56,8 +56,8 @@ pub fn apply_filter_into(
     }
 }
 
-pub fn unfilter_row(filter_type: u8, bytes_per_pixel: usize, src: &[u8], prev: Option<Vec<u8>>, dst: &mut [u8]){
-    let prev = prev.unwrap_or(vec![0u8; src.len()]);
+pub fn unfilter_row(filter_type: u8, bytes_per_pixel: usize, src: &[u8], prev: Option<&[u8]>, dst: &mut [u8]) {
+    let prev = prev.unwrap_or(&[]);
 
     match filter_type {
         0 => { // None
@@ -72,23 +72,24 @@ pub fn unfilter_row(filter_type: u8, bytes_per_pixel: usize, src: &[u8], prev: O
         2 => { // Up
             // Recon(x) = Filt(x) + Recon(b)
             for i in 0..src.len() {
-                dst[i] = src[i].wrapping_add(prev[i]);
+                let up = if i < prev.len() { prev[i] } else { 0 };
+                dst[i] = src[i].wrapping_add(up);
             }
         },
         3 => { // Avg
             // Recon(x) = Filt(x) + floor((Recon(a) + Recon(b)) / 2)
             for i in 0..src.len() {
                 let left = if i >= bytes_per_pixel { dst[i - bytes_per_pixel] } else { 0 };
-                let up = prev[i];
+                let up = if i < prev.len() { prev[i] } else { 0 };
                 let avg = ((left as u16 + up as u16) / 2) as u8;
                 dst[i] = src[i].wrapping_add(avg);
             }
         },
         4 => { // Paeth
             for i in 0..src.len() {
-                let top = prev[i];
+                let top = if i < prev.len() { prev[i] } else { 0 };
                 let left = if i >= bytes_per_pixel { dst[i - bytes_per_pixel] } else { 0 };
-                let top_left = if i >= bytes_per_pixel { prev[i - bytes_per_pixel] } else { 0 };
+                let top_left = if i >= bytes_per_pixel && i < prev.len() { prev[i - bytes_per_pixel] } else { 0 };
                 let p = paeth_predictor(left, top, top_left);
                 dst[i] = src[i].wrapping_add(p);
             }
@@ -117,5 +118,26 @@ fn paeth_predictor(a: u8, b: u8, c: u8) -> u8{
     }
     else {
         c as u8
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_unfilter_row_roundtrip_all_filters() {
+        let prev = [10u8, 20, 30, 40, 50, 60, 70, 80];
+        let row = [15u8, 25, 35, 45, 55, 65, 75, 85];
+        let mut filtered = Vec::new();
+        let mut reconstructed = vec![0u8; row.len()];
+
+        for prev_opt in [None, Some(&prev[..])] {
+            for filter_type in 0..=4 {
+                apply_filter_into(filter_type, 4, &row, prev_opt, &mut filtered);
+                unfilter_row(filter_type, 4, &filtered, prev_opt, &mut reconstructed);
+                assert_eq!(reconstructed, row, "filter {filter_type} failed");
+            }
+        }
     }
 }

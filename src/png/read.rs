@@ -164,16 +164,13 @@ impl DecodedPng {
             let source = &raw[start + 1 .. start + 1 + row_bytes];
 
             let dest_row_start = row * row_bytes;
-
+            let (before, rest) = unfiltered.split_at_mut(dest_row_start);
             let prev = if row == 0 {
                 None
             } else {
-                let prev_start = (row - 1) * row_bytes;
-                let prev_data = unfiltered[prev_start..prev_start + row_bytes].to_vec();
-                Some(prev_data)
+                Some(&before[dest_row_start - row_bytes..dest_row_start])
             };
-
-            let dest = &mut unfiltered[dest_row_start..dest_row_start + row_bytes];
+            let dest = &mut rest[..row_bytes];
 
             unfilter_row(filter_type, bytes_per_pixel, source, prev, dest);
         }
