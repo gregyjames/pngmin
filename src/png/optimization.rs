@@ -1,4 +1,4 @@
-use crate::png::filter::apply_filter;
+use crate::png::filter::apply_filter_into;
 
 pub const BLACK_VEC: [u8; 4] = [0, 0, 0, 0];
 pub const FILTERS: [u8; 4] = [1u8, 2u8, 3u8, 4u8];
@@ -22,22 +22,28 @@ fn score_filtered_row(filtered: &[u8]) -> u64 {
         .map(|&b| (b as i8 as i32).abs() as u64)
         .sum()
 }
-pub fn choose_best_filter(row: &[u8], prev: Option<&[u8]>, bytes_per_pixel: usize) -> (u8, Vec<u8>) {
+pub fn choose_best_filter_into(
+    row: &[u8],
+    prev: Option<&[u8]>,
+    bytes_per_pixel: usize,
+    best_buf: &mut Vec<u8>,
+    candidate_buf: &mut Vec<u8>,
+) -> u8 {
     let mut best_filter = 0u8;
-    let mut best_bytes = apply_filter(0, bytes_per_pixel, row, prev);
-    let mut best_score = score_filtered_row(&best_bytes);
+    apply_filter_into(0, bytes_per_pixel, row, prev, best_buf);
+    let mut best_score = score_filtered_row(best_buf);
 
     for f in FILTERS {
-        let bytes = apply_filter(f, bytes_per_pixel, row, prev);
-        let s = score_filtered_row(&bytes);
+        apply_filter_into(f, bytes_per_pixel, row, prev, candidate_buf);
+        let s = score_filtered_row(candidate_buf);
         if s < best_score {
             best_score = s;
             best_filter = f;
-            best_bytes = bytes;
+            std::mem::swap(best_buf, candidate_buf);
         }
     }
 
-    (best_filter, best_bytes)
+    best_filter
 }
 
 // https://en.wikipedia.org/wiki/Color_depth
@@ -93,5 +99,24 @@ mod tests {
     fn test_quantize_colors_eight_bits_is_lossless() {
         let input = [12, 34, 56, 78, 255, 0, 127, 200];
         assert_eq!(quantize_colors(&input, 8), input);
+    }
+
+    #[test]
+    fn test_choose_best_filter_into_reuses_buffers() {
+        let prev = [10u8, 20, 30, 40, 50, 60, 70, 80];
+        let row = [11u8, 21, 31, 41, 51, 61, 71, 81];
+
+        let mut best_buf = Vec::with_capacity(row.len());
+        let mut candidate_buf = Vec::with_capacity(row.len());
+        let cap_best = best_buf.capacity();
+        let cap_cand = candidate_buf.capacity();
+
+        let filter = choose_best_filter_into(&row, Some(&prev), 4, &mut best_buf, &mut candidate_buf);
+
+        // Up filter (2): each byte is prev[i] + 1, so filtered row is all 1s (score = 8).
+        assert_eq!(filter, 2);
+        assert_eq!(best_buf, [1u8; 8]);
+        assert_eq!(best_buf.capacity(), cap_best);
+        assert_eq!(candidate_buf.capacity(), cap_cand);
     }
 }
