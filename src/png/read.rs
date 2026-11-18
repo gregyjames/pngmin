@@ -70,11 +70,12 @@ impl DecodedPng {
                 if interlace != 0 {
                     bail!("Interlaced PNG not supported in this minimal decoder");
                 }
-                if bit_depth != 8 {
-                    bail!("Only 8-bit PNG supported in this minimal decoder");
+                let image_type = parse_image_type(color_type, bit_depth);
+                if image_type == ImageType::Unknown {
+                    bail!("Unsupported color type {} with bit depth {}", color_type, bit_depth);
                 }
-                if color_type != 2 && color_type != 3 && color_type != 6 {
-                    bail!("Only color types 2 (RGB), 3 (Indexed), and 6 (RGBA) supported");
+                if bit_depth == 16 {
+                    bail!("16-bit PNG not supported in this minimal decoder");
                 }
                 info = Some(PngInfo{
                     width,
@@ -82,7 +83,7 @@ impl DecodedPng {
                     bit_depth,
                     color_type,
                     interlace,
-                    image_type: parse_image_type(color_type, bit_depth)
+                    image_type,
                 })
             }
             else if chunk_type == PLTE {
@@ -137,26 +138,27 @@ impl DecodedPng {
             }
         }
 
-        let info = info.ok_or("Missing IHDR image info.").unwrap();
+        let info = info.ok_or_else(|| anyhow::anyhow!("Missing IHDR image info."))?;
 
         let mut decoder = ZlibDecoder::new(&idat_data[..]);
         let mut raw: Vec<u8> = Vec::new();
         decoder.read_to_end(&mut raw).with_context(|| "Could not read file")?;
 
-        // Truecolor with alpha: red, green, blue, alpha.
-        // Truecolor: red, green, blue
-
-        let bytes_per_pixel = match info.image_type {
-            ImageType::TruecolorAlpha => 4, // RGBA
-            ImageType::Truecolor => 3,      // RGB
-            ImageType::IndexedColor => 1,   // Palette index
-            _ => panic!("Unsupported color type")
+        let channels = match info.image_type {
+            ImageType::Grayscale => 1,
+            ImageType::GrayscaleAlpha => 2,
+            ImageType::Truecolor => 3,
+            ImageType::IndexedColor => 1,
+            ImageType::TruecolorAlpha => 4,
+            ImageType::Unknown => bail!("Unsupported color type"),
         };
 
         let width = info.width as usize;
         let height = info.height as usize;
-        let row_bytes = width * bytes_per_pixel;
-        let expected = height * (1 +row_bytes); // 7.3 there is one filter byte per row
+        let bits_per_pixel = channels * info.bit_depth as usize;
+        let row_bytes = (width * bits_per_pixel).div_ceil(8);
+        let filter_bpp = bits_per_pixel.div_ceil(8);
+        let expected = height * (1 + row_bytes); // 7.3 there is one filter byte per row
 
         if raw.len() != expected {
             bail!("Decompressed image data doesn't match expected image data.");
@@ -168,7 +170,7 @@ impl DecodedPng {
 
         pb.set_message("Unfilting rows in image...");
         for row in 0..height {
-            let start = row * (1 +row_bytes);
+            let start = row * (1 + row_bytes);
             let filter_type = raw[start];
             let source = &raw[start + 1 .. start + 1 + row_bytes];
 
@@ -181,15 +183,35 @@ impl DecodedPng {
             };
             let dest = &mut rest[..row_bytes];
 
-            unfilter_row(filter_type, bytes_per_pixel, source, prev, dest);
+            unfilter_row(filter_type, filter_bpp, source, prev, dest);
         }
         pb.inc(1);
-
-        //let mut pixels: Vec<Pixel> = Vec::with_capacity(width * height);
 
         pb.set_message("Decompressed image data...");
         let mut rgba = Vec::with_capacity(width * height * 4);
         match info.image_type {
+            ImageType::Grayscale => {
+                let transparent_gray = if trns_alphas.len() == 2 {
+                    Some(u16::from_be_bytes([trns_alphas[0], trns_alphas[1]]))
+                } else {
+                    None
+                };
+                for y in 0..height {
+                    let row = &unfiltered[y * row_bytes..(y + 1) * row_bytes];
+                    for sample in unpack_row_samples(row, width, info.bit_depth) {
+                        let g = scale_gray_to_u8(sample, info.bit_depth);
+                        let a = if transparent_gray == Some(sample as u16) { 0 } else { 255 };
+                        rgba.extend_from_slice(&[g, g, g, a]);
+                    }
+                }
+            },
+            ImageType::GrayscaleAlpha => {
+                for chunk in unfiltered.chunks_exact(2) {
+                    let g = chunk[0];
+                    let a = chunk[1];
+                    rgba.extend_from_slice(&[g, g, g, a]);
+                }
+            },
             ImageType::Truecolor => {
                 for i in 0..(width * height) {
                     let r = unfiltered[i * 3];
@@ -203,15 +225,18 @@ impl DecodedPng {
             },
             ImageType::IndexedColor => {
                 let pal = palette.ok_or_else(|| anyhow::anyhow!("Indexed PNG is missing PLTE chunk"))?;
-                for &idx in &unfiltered {
-                    let [r, g, b] = *pal
-                        .get(idx as usize)
-                        .ok_or_else(|| anyhow::anyhow!("Palette index {} out of range", idx))?;
-                    let a = trns_alphas.get(idx as usize).copied().unwrap_or(255);
-                    rgba.extend_from_slice(&[r, g, b, a]);
+                for y in 0..height {
+                    let row = &unfiltered[y * row_bytes..(y + 1) * row_bytes];
+                    for idx in unpack_row_samples(row, width, info.bit_depth) {
+                        let [r, g, b] = *pal
+                            .get(idx as usize)
+                            .ok_or_else(|| anyhow::anyhow!("Palette index {} out of range", idx))?;
+                        let a = trns_alphas.get(idx as usize).copied().unwrap_or(255);
+                        rgba.extend_from_slice(&[r, g, b, a]);
+                    }
                 }
             },
-            _ => unreachable!()
+            ImageType::Unknown => unreachable!(),
         }
         pb.inc(1);
 
@@ -221,6 +246,29 @@ impl DecodedPng {
         };
 
         Ok(image)
+    }
+}
+
+#[inline]
+fn unpack_row_samples(row: &[u8], width: usize, bit_depth: u8) -> impl Iterator<Item = u8> + '_ {
+    let ppb = 8 / bit_depth as usize;
+    let mask = ((1u16 << bit_depth) - 1) as u8;
+    (0..width).map(move |x| {
+        let byte = row[x / ppb];
+        let slot = x % ppb;
+        let shift = 8 - (slot + 1) * (bit_depth as usize);
+        (byte >> shift) & mask
+    })
+}
+
+#[inline]
+fn scale_gray_to_u8(sample: u8, bit_depth: u8) -> u8 {
+    match bit_depth {
+        1 => sample * 255,
+        2 => sample * 85,
+        4 => sample * 17,
+        8 => sample,
+        _ => sample,
     }
 }
 
@@ -267,5 +315,62 @@ mod tests {
         let pb = ProgressBar::hidden();
         let err = DecodedPng::from_bytes(&png, None, &pb).unwrap_err();
         assert!(err.to_string().contains("compression or filter"));
+    }
+
+    #[test]
+    fn test_read_1bit_grayscale_with_trns() {
+        use flate2::write::ZlibEncoder;
+        use flate2::Compression;
+        use std::io::Write;
+
+        let mut out = Vec::new();
+        out.extend_from_slice(&PNG_SIG);
+
+        // 3x1, 1-bit grayscale (color_type = 0)
+        let mut ihdr = Vec::new();
+        ihdr.write_u32::<BigEndian>(3).unwrap();
+        ihdr.write_u32::<BigEndian>(1).unwrap();
+        ihdr.push(1); // bit_depth = 1
+        ihdr.push(0); // color_type = Grayscale
+        ihdr.push(0);
+        ihdr.push(0);
+        ihdr.push(0);
+
+        out.write_u32::<BigEndian>(ihdr.len() as u32).unwrap();
+        out.extend_from_slice(&IHDR);
+        out.extend_from_slice(&ihdr);
+        out.write_u32::<BigEndian>(0).unwrap();
+
+        // tRNS: gray sample 0 is transparent
+        out.write_u32::<BigEndian>(2).unwrap();
+        out.extend_from_slice(&TRNS);
+        out.extend_from_slice(&0u16.to_be_bytes());
+        out.write_u32::<BigEndian>(0).unwrap();
+
+        // IDAT: filter 0, pixels [1, 0, 1] -> 0b1010_0000 = 0xA0
+        let mut enc = ZlibEncoder::new(Vec::new(), Compression::fast());
+        enc.write_all(&[0, 0b1010_0000]).unwrap();
+        let idat = enc.finish().unwrap();
+        out.write_u32::<BigEndian>(idat.len() as u32).unwrap();
+        out.extend_from_slice(&IDAT);
+        out.extend_from_slice(&idat);
+        out.write_u32::<BigEndian>(0).unwrap();
+
+        out.write_u32::<BigEndian>(0).unwrap();
+        out.extend_from_slice(&IEND);
+        out.write_u32::<BigEndian>(0).unwrap();
+
+        let pb = ProgressBar::hidden();
+        let decoded = DecodedPng::from_bytes(&out, None, &pb).unwrap();
+        assert_eq!(decoded.info.color_type, 0);
+        assert_eq!(decoded.info.bit_depth, 1);
+        assert_eq!(
+            decoded.rgba,
+            vec![
+                255, 255, 255, 255,
+                0, 0, 0, 0,
+                255, 255, 255, 255,
+            ]
+        );
     }
 }

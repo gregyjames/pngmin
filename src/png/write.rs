@@ -13,7 +13,8 @@ use zopfli::{compress, Format, Options};
 use crate::png::types::*;
 use crate::png::constants::*;
 use crate::png::optimization::{
-    choose_best_filter_into, prepare_rgba_in_place, quantize_to_palette, try_build_palette,
+    choose_best_filter_into, pack_indices_by_row, palette_bit_depth, prepare_rgba_in_place,
+    quantize_to_palette, try_build_palette,
 };
 
 impl DecodedPng {
@@ -27,26 +28,50 @@ impl DecodedPng {
         let height = self.info.height as usize;
 
         pb.set_message("Optimizing image...");
-        let has_alpha = prepare_rgba_in_place(&mut self.rgba);
-        let palette_data = match compression_level {
-            CompressionLevel::Lossless => try_build_palette(&self.rgba),
-            CompressionLevel::Balanced => Some(
-                try_build_palette(&self.rgba)
-                    .unwrap_or_else(|| quantize_to_palette(&self.rgba, width, height, 256, true)),
-            ),
-            CompressionLevel::Maximum => {
-                Some(quantize_to_palette(&self.rgba, width, height, 128, false))
+        let (has_alpha, is_grayscale) = prepare_rgba_in_place(&mut self.rgba);
+        let palette_data = if is_grayscale && !has_alpha {
+            None
+        } else {
+            match compression_level {
+                CompressionLevel::Lossless => try_build_palette(&self.rgba),
+                CompressionLevel::Balanced => Some(
+                    try_build_palette(&self.rgba)
+                        .unwrap_or_else(|| quantize_to_palette(&self.rgba, width, height, 256, true)),
+                ),
+                CompressionLevel::Maximum => {
+                    Some(quantize_to_palette(&self.rgba, width, height, 128, false))
+                }
             }
         };
 
         pb.inc(1);
 
-        let (color_type, bytes_per_pixel, image_data, plte_trns) =
-            if let Some((plte, trns, indices)) = palette_data {
+        let (color_type, bit_depth, filter_bpp, row_bytes, image_data, plte_trns) =
+            if is_grayscale && !has_alpha {
+                let pixel_count = width * height;
+                for i in 0..pixel_count {
+                    self.rgba[i] = self.rgba[i * 4];
+                }
+                self.rgba.truncate(pixel_count);
+                (0u8, 8u8, 1usize, width, self.rgba, None)
+            } else if let Some((plte, trns, indices)) = palette_data {
                 drop(self.rgba);
-                (3u8, 1usize, indices, Some((plte, trns)))
+                let depth = palette_bit_depth(plte.len() / 3);
+                let row_bytes = (width * depth as usize).div_ceil(8);
+                let packed = pack_indices_by_row(&indices, width, height, depth);
+                (3u8, depth, 1usize, row_bytes, packed, Some((plte, trns)))
+            } else if is_grayscale {
+                let pixel_count = width * height;
+                for i in 0..pixel_count {
+                    let src = i * 4;
+                    let dst = i * 2;
+                    self.rgba[dst] = self.rgba[src];
+                    self.rgba[dst + 1] = self.rgba[src + 3];
+                }
+                self.rgba.truncate(pixel_count * 2);
+                (4u8, 8u8, 2usize, width * 2, self.rgba, None)
             } else if has_alpha {
-                (6u8, 4usize, self.rgba, None)
+                (6u8, 8u8, 4usize, width * 4, self.rgba, None)
             } else {
                 let pixel_count = width * height;
                 for i in 0..pixel_count {
@@ -57,10 +82,8 @@ impl DecodedPng {
                     self.rgba[dst + 2] = self.rgba[src + 2];
                 }
                 self.rgba.truncate(pixel_count * 3);
-                (2u8, 3usize, self.rgba, None)
+                (2u8, 8u8, 3usize, width * 3, self.rgba, None)
             };
-
-        let row_bytes = width * bytes_per_pixel;
 
         // Apply filters and build filtered scanlines
         pb.set_message("Applying optimal filters...");
@@ -81,7 +104,7 @@ impl DecodedPng {
             let filter_type = choose_best_filter_into(
                 row_data,
                 prev_row,
-                bytes_per_pixel,
+                filter_bpp,
                 &mut best_row,
                 &mut candidate_row,
             );
@@ -121,7 +144,7 @@ impl DecodedPng {
         let mut ihdr_data = Vec::new();
         ihdr_data.write_u32::<BigEndian>(self.info.width)?;
         ihdr_data.write_u32::<BigEndian>(self.info.height)?;
-        ihdr_data.write_u8(8)?; // bit_depth
+        ihdr_data.write_u8(bit_depth)?; // bit_depth
         ihdr_data.write_u8(color_type)?;
         ihdr_data.write_u8(0)?; // compression
         ihdr_data.write_u8(0)?; // filter
@@ -308,6 +331,97 @@ mod tests {
             assert_eq!(decoded.info.color_type, 3);
             assert_eq!(decoded.info.width, width);
             assert_eq!(decoded.info.height, height);
+        }
+    }
+
+    #[test]
+    fn test_opaque_grayscale_emits_color_type_0_and_roundtrips() {
+        let pb = ProgressBar::hidden();
+        let width = 8u32;
+        let height = 4u32;
+        let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+        for i in 0..(width * height) {
+            let g = (i * 8) as u8;
+            rgba.extend_from_slice(&[g, g, g, 255]);
+        }
+        let img = DecodedPng {
+            info: PngInfo {
+                width,
+                height,
+                bit_depth: 8,
+                color_type: 6,
+                interlace: 0,
+                image_type: ImageType::TruecolorAlpha,
+            },
+            rgba: rgba.clone(),
+        };
+
+        let encoded = img.into_encoded_optimized(CompressionLevel::Lossless, None, &pb).unwrap();
+        let decoded = DecodedPng::from_bytes(&encoded, None, &pb).unwrap();
+        assert_eq!(decoded.info.color_type, 0);
+        assert_eq!(decoded.info.bit_depth, 8);
+        assert_eq!(decoded.rgba, rgba);
+    }
+
+    #[test]
+    fn test_grayscale_alpha_over_256_colors_emits_color_type_4_and_roundtrips() {
+        let pb = ProgressBar::hidden();
+        let width = 16u32;
+        let height = 20u32;
+        let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+        for i in 0..(width * height) {
+            let g = (i % 256) as u8;
+            let a = if i < 256 { 128 } else { 200 };
+            rgba.extend_from_slice(&[g, g, g, a]);
+        }
+        let img = DecodedPng {
+            info: PngInfo {
+                width,
+                height,
+                bit_depth: 8,
+                color_type: 6,
+                interlace: 0,
+                image_type: ImageType::TruecolorAlpha,
+            },
+            rgba: rgba.clone(),
+        };
+
+        let encoded = img.into_encoded_optimized(CompressionLevel::Lossless, None, &pb).unwrap();
+        let decoded = DecodedPng::from_bytes(&encoded, None, &pb).unwrap();
+        assert_eq!(decoded.info.color_type, 4);
+        assert_eq!(decoded.info.bit_depth, 8);
+        assert_eq!(decoded.rgba, rgba);
+    }
+
+    #[test]
+    fn test_sub8bit_plte_packing_for_2_4_16_colors_roundtrips() {
+        let pb = ProgressBar::hidden();
+        let width = 5u32; // Non-byte-aligned width to exercise row padding
+        let height = 4u32;
+
+        for (num_colors, expected_depth) in [(2usize, 1u8), (4, 2), (16, 4)] {
+            let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+            for i in 0..(width * height) as usize {
+                let c = i % num_colors;
+                rgba.extend_from_slice(&[(c * 15) as u8, 10, (255 - c * 15) as u8, 255]);
+            }
+            let img = DecodedPng {
+                info: PngInfo {
+                    width,
+                    height,
+                    bit_depth: 8,
+                    color_type: 6,
+                    interlace: 0,
+                    image_type: ImageType::TruecolorAlpha,
+                },
+                rgba: rgba.clone(),
+            };
+
+            let encoded = img.into_encoded_optimized(CompressionLevel::Lossless, None, &pb).unwrap();
+            let decoded = DecodedPng::from_bytes(&encoded, None, &pb).unwrap();
+            assert_eq!(decoded.info.color_type, 3);
+            assert_eq!(decoded.info.bit_depth, expected_depth);
+            assert_eq!(decoded.rgba, rgba);
         }
     }
 }

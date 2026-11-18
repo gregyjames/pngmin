@@ -3,19 +3,58 @@ use crate::png::filter::apply_filter_into;
 pub const BLACK_VEC: [u8; 4] = [0, 0, 0, 0];
 pub const FILTERS: [u8; 4] = [1u8, 2u8, 3u8, 4u8];
 
-/// Zeroes RGB on fully transparent pixels and returns whether any pixel has non-opaque alpha (`a != 255`).
-pub fn prepare_rgba_in_place(rgba: &mut [u8]) -> bool {
+/// Zeroes RGB on fully transparent pixels and returns `(has_alpha, is_grayscale)`.
+pub fn prepare_rgba_in_place(rgba: &mut [u8]) -> (bool, bool) {
     let mut has_alpha = false;
+    let mut is_grayscale = true;
     for pixel in rgba.chunks_exact_mut(4) {
         let a = pixel[3];
         if a == 0 {
             pixel.copy_from_slice(&BLACK_VEC);
             has_alpha = true;
-        } else if a != 255 {
-            has_alpha = true;
+        } else {
+            if a != 255 {
+                has_alpha = true;
+            }
+            if pixel[0] != pixel[1] || pixel[1] != pixel[2] {
+                is_grayscale = false;
+            }
         }
     }
-    has_alpha
+    (has_alpha, is_grayscale)
+}
+
+#[inline]
+pub fn palette_bit_depth(num_colors: usize) -> u8 {
+    if num_colors <= 2 {
+        1
+    } else if num_colors <= 4 {
+        2
+    } else if num_colors <= 16 {
+        4
+    } else {
+        8
+    }
+}
+
+pub fn pack_indices_by_row(indices: &[u8], width: usize, height: usize, bit_depth: u8) -> Vec<u8> {
+    if bit_depth == 8 {
+        return indices.to_vec();
+    }
+    let ppb = 8 / bit_depth as usize;
+    let row_bytes = (width * bit_depth as usize).div_ceil(8);
+    let mut packed = vec![0u8; height * row_bytes];
+    for y in 0..height {
+        let src_row = &indices[y * width..(y + 1) * width];
+        let dst_row = &mut packed[y * row_bytes..(y + 1) * row_bytes];
+        for (x, &idx) in src_row.iter().enumerate() {
+            let byte_idx = x / ppb;
+            let slot = x % ppb;
+            let shift = 8 - (slot + 1) * (bit_depth as usize);
+            dst_row[byte_idx] |= idx << shift;
+        }
+    }
+    packed
 }
 
 // apparently, according to GPT small values near zero compress better? So this is a cheap scoring metric
@@ -375,14 +414,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_prepare_rgba_in_place_zeroes_transparent_rgb_and_tracks_alpha() {
-        let mut opaque = [12, 34, 56, 255, 200, 100, 50, 255];
-        assert!(!prepare_rgba_in_place(&mut opaque));
-        assert_eq!(opaque, [12, 34, 56, 255, 200, 100, 50, 255]);
+    fn test_prepare_rgba_in_place_zeroes_transparent_rgb_and_tracks_alpha_and_gray() {
+        let mut opaque_color = [12, 34, 56, 255, 200, 100, 50, 255];
+        assert_eq!(prepare_rgba_in_place(&mut opaque_color), (false, false));
+        assert_eq!(opaque_color, [12, 34, 56, 255, 200, 100, 50, 255]);
 
-        let mut with_transparent = [123, 45, 67, 0, 12, 34, 56, 1];
-        assert!(prepare_rgba_in_place(&mut with_transparent));
-        assert_eq!(with_transparent, [0, 0, 0, 0, 12, 34, 56, 1]);
+        let mut opaque_gray = [42, 42, 42, 255, 200, 200, 200, 255];
+        assert_eq!(prepare_rgba_in_place(&mut opaque_gray), (false, true));
+
+        let mut with_transparent_gray = [123, 45, 67, 0, 56, 56, 56, 1];
+        assert_eq!(prepare_rgba_in_place(&mut with_transparent_gray), (true, true));
+        assert_eq!(with_transparent_gray, [0, 0, 0, 0, 56, 56, 56, 1]);
+    }
+
+    #[test]
+    fn test_palette_bit_depth_and_pack_indices_by_row() {
+        assert_eq!(palette_bit_depth(1), 1);
+        assert_eq!(palette_bit_depth(2), 1);
+        assert_eq!(palette_bit_depth(3), 2);
+        assert_eq!(palette_bit_depth(4), 2);
+        assert_eq!(palette_bit_depth(5), 4);
+        assert_eq!(palette_bit_depth(16), 4);
+        assert_eq!(palette_bit_depth(17), 8);
+        assert_eq!(palette_bit_depth(256), 8);
+
+        // 3x2 image at 4-bit (2 bytes per row, 0-padded trailing nibble)
+        let packed = pack_indices_by_row(&[1, 2, 3, 4, 5, 6], 3, 2, 4);
+        assert_eq!(packed, vec![0x12, 0x30, 0x45, 0x60]);
     }
 
     #[test]
