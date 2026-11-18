@@ -12,7 +12,9 @@ use zopfli::{compress, Format, Options};
 
 use crate::png::types::*;
 use crate::png::constants::*;
-use crate::png::optimization::{choose_best_filter_into, prepare_rgba_in_place, try_build_palette};
+use crate::png::optimization::{
+    choose_best_filter_into, prepare_rgba_in_place, quantize_to_palette, try_build_palette,
+};
 
 impl DecodedPng {
     pub fn into_encoded_optimized(
@@ -25,13 +27,17 @@ impl DecodedPng {
         let height = self.info.height as usize;
 
         pb.set_message("Optimizing image...");
-        let quant_bits = match compression_level {
-            CompressionLevel::Lossless => None,
-            CompressionLevel::Balanced => Some(6),
-            CompressionLevel::Maximum => Some(4),
+        let has_alpha = prepare_rgba_in_place(&mut self.rgba);
+        let palette_data = match compression_level {
+            CompressionLevel::Lossless => try_build_palette(&self.rgba),
+            CompressionLevel::Balanced => Some(
+                try_build_palette(&self.rgba)
+                    .unwrap_or_else(|| quantize_to_palette(&self.rgba, width, height, 256, true)),
+            ),
+            CompressionLevel::Maximum => {
+                Some(quantize_to_palette(&self.rgba, width, height, 128, false))
+            }
         };
-        let has_alpha = prepare_rgba_in_place(&mut self.rgba, quant_bits);
-        let palette_data = try_build_palette(&self.rgba);
 
         pb.inc(1);
 
@@ -271,5 +277,37 @@ mod tests {
         let dec_257 = DecodedPng::from_bytes(&enc_257, None, &pb).unwrap();
         assert_eq!(dec_257.info.color_type, 2);
         assert_eq!(dec_257.rgba, rgba_257);
+    }
+
+    #[test]
+    fn test_balanced_and_maximum_quantize_over_256_colors_to_plte() {
+        let pb = ProgressBar::hidden();
+        let width = 32u32;
+        let height = 16u32;
+        let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+        for y in 0..height {
+            for x in 0..width {
+                rgba.extend_from_slice(&[(x * 8) as u8, (y * 16) as u8, ((x + y) * 5) as u8, 255]);
+            }
+        }
+        let img = DecodedPng {
+            info: PngInfo {
+                width,
+                height,
+                bit_depth: 8,
+                color_type: 6,
+                interlace: 0,
+                image_type: ImageType::TruecolorAlpha,
+            },
+            rgba,
+        };
+
+        for level in [CompressionLevel::Balanced, CompressionLevel::Maximum] {
+            let encoded = img.clone().into_encoded_optimized(level, None, &pb).unwrap();
+            let decoded = DecodedPng::from_bytes(&encoded, None, &pb).unwrap();
+            assert_eq!(decoded.info.color_type, 3);
+            assert_eq!(decoded.info.width, width);
+            assert_eq!(decoded.info.height, height);
+        }
     }
 }
