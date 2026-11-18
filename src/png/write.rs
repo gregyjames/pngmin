@@ -94,10 +94,10 @@ impl DecodedPng {
                 compressed = encoder.finish()?;
             },
             CompressionLevel::Maximum => {
-                let options = Options{
-                    iteration_count: NonZeroU64::new(100).unwrap(),
-                    iterations_without_improvement: NonZeroU64::new(u64::MAX).unwrap(),
-                    maximum_block_splits: 0
+                let options = Options {
+                    iteration_count: NonZeroU64::new(15).unwrap(),
+                    iterations_without_improvement: NonZeroU64::new(5).unwrap(),
+                    maximum_block_splits: 15,
                 };
                 compress(options, Format::Zlib, &filtered[..], &mut compressed)?;
             }
