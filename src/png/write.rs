@@ -15,11 +15,6 @@ use crate::png::constants::*;
 use crate::png::optimization::{choose_best_filter_into, prepare_rgba_in_place, try_build_palette};
 
 impl DecodedPng {
-    pub fn encode_optimized(&self, compression_level: CompressionLevel, encryption: Option<&EncryptionKey>, pb: &ProgressBar) -> Result<Vec<u8>> {
-        self.clone()
-            .into_encoded_optimized(compression_level, encryption, pb)
-    }
-
     pub fn into_encoded_optimized(
         mut self,
         compression_level: CompressionLevel,
@@ -166,14 +161,6 @@ impl DecodedPng {
             .with_context(|| format!("Could not write file {}", path))?;
         Ok(())
     }
-
-    #[allow(dead_code)]
-    pub fn save_optimized(&self, path: &str, compression_level: CompressionLevel, encryption: Option<&EncryptionKey>, pb: &ProgressBar) -> Result<()> {
-        let encoded_bytes = self.encode_optimized(compression_level, encryption, pb)?;
-        let mut file = std::fs::File::create(path).with_context(|| format!("Could not create file {}", path))?;
-        file.write_all(&encoded_bytes)?;
-        Ok(())
-    }
 }
 
 pub fn write_chunk(writer: &mut impl Write, chunk_type: &[u8; 4], data: &[u8], encryption_key: Option<&[u8; 32]>) -> Result<()> {
@@ -229,7 +216,7 @@ mod tests {
 
         let pb = ProgressBar::hidden();
         let encoded = img
-            .encode_optimized(CompressionLevel::Lossless, None, &pb)
+            .into_encoded_optimized(CompressionLevel::Lossless, None, &pb)
             .unwrap();
         let decoded = DecodedPng::from_bytes(&encoded, None, &pb).unwrap();
 
@@ -258,7 +245,7 @@ mod tests {
             rgba: rgba_256.clone(),
         };
         let enc_256 = img_256
-            .encode_optimized(CompressionLevel::Lossless, None, &pb)
+            .into_encoded_optimized(CompressionLevel::Lossless, None, &pb)
             .unwrap();
         let dec_256 = DecodedPng::from_bytes(&enc_256, None, &pb).unwrap();
         assert_eq!(dec_256.info.color_type, 3);
@@ -279,7 +266,7 @@ mod tests {
             rgba: rgba_257.clone(),
         };
         let enc_257 = img_257
-            .encode_optimized(CompressionLevel::Lossless, None, &pb)
+            .into_encoded_optimized(CompressionLevel::Lossless, None, &pb)
             .unwrap();
         let dec_257 = DecodedPng::from_bytes(&enc_257, None, &pb).unwrap();
         assert_eq!(dec_257.info.color_type, 2);

@@ -12,22 +12,6 @@ use crate::png::{derive_key_from_password, parse_image_type};
 use zeroize::Zeroizing;
 
 impl DecodedPng {
-    #[allow(dead_code)]
-    pub fn get(&self, x: u32, y: u32) -> Pixel {
-        let w = self.info.width as usize;
-        let x = x as usize;
-        let y = y as usize;
-
-        let i = y * w + x;
-        let base = i * 4;
-
-        Pixel {
-            red: self.rgba[base],
-            green: self.rgba[base + 1],
-            blue: self.rgba[base + 2],
-            alpha: self.rgba[base + 3],
-        }
-    }
     pub async fn read_from_file_async(path: &str, password: Option<Zeroizing<String>>, pb: &ProgressBar) -> Result<DecodedPng> {
         pb.set_message(format!("Reading image {}", path));
         let bytes = smol::fs::read(path).await.with_context(|| format!("Could not read file {}", path))?;
@@ -35,15 +19,6 @@ impl DecodedPng {
         smol::unblock(move || {
             Self::from_bytes(&bytes, password.as_deref().map(String::as_str), &pb_clone)
         }).await
-    }
-
-    #[allow(dead_code)]
-    pub fn read_from_file(path: &str, password: Option<&str>, pb: &ProgressBar) -> Result<DecodedPng> {
-        pb.set_message(format!("Reading image {}", path));
-        let mut file = std::fs::File::open(path).with_context(|| format!("Could not open file {}", path))?;
-        let mut bytes: Vec<u8> = Vec::new();
-        file.read_to_end(&mut bytes).with_context(|| format!("Could not read file {}", path))?;
-        Self::from_bytes(&bytes, password, pb)
     }
 
     pub fn from_bytes(bytes: &[u8], password: Option<&str>, pb: &ProgressBar) -> Result<DecodedPng> {

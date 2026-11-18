@@ -456,7 +456,7 @@ mod tests {
             let test_image = make_test_image();
             let pb = ProgressBar::hidden();
             let plain_bytes = test_image
-                .encode_optimized(CompressionLevel::Lossless, None, &pb)
+                .into_encoded_optimized(CompressionLevel::Lossless, None, &pb)
                 .unwrap();
 
             let res = DecodedPng::from_bytes(&plain_bytes, Some("any-pw"), &pb);
