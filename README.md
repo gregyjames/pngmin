@@ -17,6 +17,15 @@ Finally thought of a cool use case for this: encryption! Since a PNG is basicall
 ## Usage
 When encrypting or decrypting, `pngmin` prompts for your password interactively (and embeds a random 16-byte Argon2id salt in a `pnGm` PNG chunk—no separate key file needed).
 
+#### Optimize a single PNG file (default mode)
+```
+# Creates image_optimized.png in the same directory
+pngmin -i image.png
+
+# Equivalent explicit flag, with compression level and custom output filename
+pngmin --optimize -i image.png -m maximum -o optimized-image.png
+```
+
 #### Encrypt a single PNG file
 ```
 # Creates image_encrypted.png in the same directory
@@ -35,26 +44,29 @@ pngmin -d -i image_encrypted.png
 pngmin -d -i image_encrypted.png -o decrypted-image.png
 ```
 
-#### Encrypt/Decrypt Multiple PNG Files 
+#### Optimize/Encrypt/Decrypt Multiple PNG Files 
 ```
+# Optimize all PNG files and save to a different directory
+pngmin --dir ./images --out-dir ./optimized
+
 # Encrypt all PNG files and save to a different directory
 pngmin -e --dir ./images --out-dir ./encrypted
-
 
 # Decrypt all PNG files and save to a different directory
 pngmin -d --dir ./encrypted --out-dir ./decrypted
 ```
 
 ## Command reference
-| Flag      | Long Form  | Description                         |
-|-----------|------------|-------------------------------------|
-| -d        | --decrypt  | Decrypt mode                        |
-| -e        | --encrypt  | Encrypt mode                        |
-| --dir     |            | Input directory                     |
-| -o        |            | Output filename                     |
-| --out-dir |            | Output directory                    |
-| -m        | --level    | Compression Level                   |
-| -i        | --input    | Input PNG file                      |
+| Flag       | Long Form  | Description                              |
+|------------|------------|------------------------------------------|
+|            | --optimize | Optimize mode (default if no -e or -d)   |
+| -d         | --decrypt  | Decrypt mode                             |
+| -e         | --encrypt  | Encrypt mode                             |
+| --dir      |            | Input directory                          |
+| -o         |            | Output filename                          |
+| --out-dir  |            | Output directory                         |
+| -m         | --level    | Compression Level                        |
+| -i         | --input    | Input PNG file                           |
 
 Compression Levels:
 - lossless (default) - Compress without quality loss (i.e only optimising alpha channel, using better, slower Zopfli compression)
