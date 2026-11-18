@@ -3,17 +3,41 @@ use crate::png::filter::apply_filter_into;
 pub const BLACK_VEC: [u8; 4] = [0, 0, 0, 0];
 pub const FILTERS: [u8; 4] = [1u8, 2u8, 3u8, 4u8];
 
-pub fn optimize_alpha_channel(rgba: &[u8]) -> Vec<u8> {
+#[allow(dead_code)]
+pub fn optimize_alpha_channel_in_place(rgba: &mut [u8]) {
     //todo!("Think oxipng brute forces by actually compressing the bytes after the filter is applied? Maybe implement that for max compression.");
-    rgba.chunks_exact(4).map(|chunk| {
-        let a = chunk[3];
-
-        if a == 0{
-            BLACK_VEC
-        }else{
-            [chunk[0], chunk[1], chunk[2], a]
+    for chunk in rgba.chunks_exact_mut(4) {
+        if chunk[3] == 0 {
+            chunk.copy_from_slice(&BLACK_VEC);
         }
-    }).flatten().collect()
+    }
+}
+
+/// Quantizes RGB channels in-place (if `bits` is `Some(1..=7)`), zeroes RGB on
+/// fully transparent pixels, and returns whether any pixel has non-opaque alpha (`a != 255`).
+pub fn prepare_rgba_in_place(rgba: &mut [u8], bits: Option<u8>) -> bool {
+    let quant_params = bits
+        .filter(|&b| b > 0 && b < 8)
+        .map(|b| (8 - b, (1u16 << b) - 1));
+
+    let mut has_alpha = false;
+    for pixel in rgba.chunks_exact_mut(4) {
+        let a = pixel[3];
+        if a == 0 {
+            pixel.copy_from_slice(&BLACK_VEC);
+            has_alpha = true;
+        } else {
+            if let Some((shift, max_q)) = quant_params {
+                pixel[0] = quantize_channel(pixel[0], shift, max_q);
+                pixel[1] = quantize_channel(pixel[1], shift, max_q);
+                pixel[2] = quantize_channel(pixel[2], shift, max_q);
+            }
+            if a != 255 {
+                has_alpha = true;
+            }
+        }
+    }
+    has_alpha
 }
 
 // apparently, according to GPT small values near zero compress better? So this is a cheap scoring metric
@@ -48,22 +72,21 @@ pub fn choose_best_filter_into(
 
 // https://en.wikipedia.org/wiki/Color_depth
 // https://www.geeksforgeeks.org/electronics-engineering/difference-between-uniform-and-non-uniform-quantization/
-pub fn quantize_colors(rgba: &[u8], bits: u8) -> Vec<u8> {
+#[allow(dead_code)]
+pub fn quantize_colors_in_place(rgba: &mut [u8], bits: u8) {
     if bits == 0 || bits >= 8 {
-        return rgba.to_vec();
+        return;
     }
 
     let shift = 8 - bits;
-    let max_q = ((1u16 << bits) - 1) as u16;
+    let max_q = (1u16 << bits) - 1;
 
-    rgba.chunks_exact(4).flat_map(|pixel| {
-        [
-            quantize_channel(pixel[0], shift, max_q),
-            quantize_channel(pixel[1], shift, max_q),
-            quantize_channel(pixel[2], shift, max_q),
-            pixel[3], // Don't quantize alpha
-        ]
-    }).collect()
+    for pixel in rgba.chunks_exact_mut(4) {
+        pixel[0] = quantize_channel(pixel[0], shift, max_q);
+        pixel[1] = quantize_channel(pixel[1], shift, max_q);
+        pixel[2] = quantize_channel(pixel[2], shift, max_q);
+        // Don't quantize alpha
+    }
 }
 
 #[inline]
@@ -123,7 +146,8 @@ mod tests {
         ];
 
         for bits in [4, 6] {
-            let out = quantize_colors(&input, bits);
+            let mut out = input;
+            quantize_colors_in_place(&mut out, bits);
             // Black stays black
             assert_eq!(&out[0..4], &[0, 0, 0, 0]);
             // Pure white stays pure white (255), alpha preserved
@@ -136,7 +160,28 @@ mod tests {
     #[test]
     fn test_quantize_colors_eight_bits_is_lossless() {
         let input = [12, 34, 56, 78, 255, 0, 127, 200];
-        assert_eq!(quantize_colors(&input, 8), input);
+        let mut out = input;
+        quantize_colors_in_place(&mut out, 8);
+        assert_eq!(out, input);
+    }
+
+    #[test]
+    fn test_prepare_rgba_in_place_matches_alpha_and_quantization() {
+        let mut opaque = [12, 34, 56, 255, 200, 100, 50, 255];
+        assert!(!prepare_rgba_in_place(&mut opaque, None));
+        assert_eq!(opaque, [12, 34, 56, 255, 200, 100, 50, 255]);
+
+        let mut with_alpha = [123, 45, 67, 0, 255, 255, 255, 128];
+        assert!(prepare_rgba_in_place(&mut with_alpha, Some(4)));
+        assert_eq!(&with_alpha[0..4], &[0, 0, 0, 0]);
+        assert_eq!(&with_alpha[4..8], &[255, 255, 255, 128]);
+    }
+
+    #[test]
+    fn test_optimize_alpha_channel_in_place_zeroes_transparent_rgb() {
+        let mut buf = [12, 34, 56, 0, 12, 34, 56, 1];
+        optimize_alpha_channel_in_place(&mut buf);
+        assert_eq!(buf, [0, 0, 0, 0, 12, 34, 56, 1]);
     }
 
     #[test]

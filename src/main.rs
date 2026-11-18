@@ -404,6 +404,7 @@ mod tests {
                 let dec_path = format!("target/test_level_{:?}_dec.png", level);
 
                 test_image
+                    .clone()
                     .save_optimized_async(&enc_path, level.clone(), Some(enc.clone()), &pb)
                     .await
                     .unwrap();
