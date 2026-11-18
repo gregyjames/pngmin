@@ -22,6 +22,9 @@ struct Args {
     #[arg(short = 'd', long = "decrypt")]
     decrypt: bool,
 
+    #[arg(long = "optimize")]
+    optimize: bool,
+
     #[arg(short = 'm', long = "level", required = false, default_value = "lossless")]
     compression_level: CompressionLevel,
 
@@ -30,6 +33,29 @@ struct Args {
 
     #[arg(long = "out-dir")]
     out_dir: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Mode {
+    Optimize,
+    Encrypt,
+    Decrypt,
+}
+
+fn resolve_mode(args: &Args) -> anyhow::Result<Mode> {
+    if args.encrypt && args.decrypt {
+        bail!("Cannot specify both -e (encrypt) and -d (decrypt)");
+    }
+    if args.optimize && (args.encrypt || args.decrypt) {
+        bail!("Cannot combine --optimize with -e (encrypt) or -d (decrypt)");
+    }
+    if args.encrypt {
+        Ok(Mode::Encrypt)
+    } else if args.decrypt {
+        Ok(Mode::Decrypt)
+    } else {
+        Ok(Mode::Optimize)
+    }
 }
 
 async fn derive_key_from_password_async(
@@ -134,6 +160,27 @@ async fn process_file_encrypt_async(
     Ok(())
 }
 
+async fn process_file_optimize_async(
+    input_file: &str,
+    output_file: Option<String>,
+    out_dir: Option<&str>,
+    compression_level: CompressionLevel,
+    pb: &ProgressBar,
+) -> anyhow::Result<()> {
+    let image = DecodedPng::read_from_file_async(input_file, None, pb).await?;
+
+    let output = output_file.unwrap_or_else(|| get_output_path(input_file, out_dir, "_optimized"));
+
+    if let Some(out_dir) = out_dir {
+        smol::fs::create_dir_all(out_dir).await?;
+    }
+
+    image
+        .save_optimized_async(&output, compression_level, None, pb)
+        .await?;
+    Ok(())
+}
+
 async fn process_file_decrypt_async(
     input_file: &str,
     output_file: Option<String>,
@@ -159,12 +206,9 @@ const PROGRESS_TEMPLATE: &str = "{spinner:.green} [{elapsed_precise}] {bar:40.cy
 
 async fn async_main() -> anyhow::Result<()> {
     let args = Args::parse();
+    let mode = resolve_mode(&args)?;
 
     if let Some(dir) = args.directory {
-        if !args.encrypt && !args.decrypt {
-            bail!("Please specify -e (encrypt) or -d (decrypt) when using --dir");
-        }
-
         let png_files = get_png_files_async(&dir).await?;
         let m = MultiProgress::new();
 
@@ -173,11 +217,14 @@ async fn async_main() -> anyhow::Result<()> {
             return Ok(());
         }
 
-        let password = prompt_password(args.encrypt)?;
-        let batch_enc = if args.encrypt {
-            Some(derive_key_from_password_async(password.clone(), None).await?)
-        } else {
-            None
+        let password = match mode {
+            Mode::Optimize => None,
+            Mode::Encrypt => Some(prompt_password(true)?),
+            Mode::Decrypt => Some(prompt_password(false)?),
+        };
+        let batch_enc = match (mode, &password) {
+            (Mode::Encrypt, Some(pw)) => Some(derive_key_from_password_async(pw.clone(), None).await?),
+            _ => None,
         };
 
         println!(
@@ -196,7 +243,6 @@ async fn async_main() -> anyhow::Result<()> {
             .map(|n| n.get())
             .unwrap_or(4);
         let sem = Arc::new(smol::lock::Semaphore::new(num_cpus));
-        let is_encrypt = args.encrypt;
         let mut tasks = Vec::with_capacity(png_files.len());
 
         for file_path in png_files {
@@ -216,33 +262,46 @@ async fn async_main() -> anyhow::Result<()> {
 
             tasks.push(smol::spawn(async move {
                 let _permit = sem_clone.acquire().await;
-                let res = if is_encrypt {
-                    process_file_encrypt_async(
-                        &input_file,
-                        None,
-                        out_dir_clone.as_deref(),
-                        enc_clone.expect("encryption key derived"),
-                        level,
-                        &pb,
-                    )
-                    .await
-                } else {
-                    process_file_decrypt_async(
-                        &input_file,
-                        None,
-                        out_dir_clone.as_deref(),
-                        pw_clone,
-                        &pb,
-                    )
-                    .await
+                let res = match mode {
+                    Mode::Optimize => {
+                        process_file_optimize_async(
+                            &input_file,
+                            None,
+                            out_dir_clone.as_deref(),
+                            level,
+                            &pb,
+                        )
+                        .await
+                    }
+                    Mode::Encrypt => {
+                        process_file_encrypt_async(
+                            &input_file,
+                            None,
+                            out_dir_clone.as_deref(),
+                            enc_clone.expect("encryption key derived"),
+                            level,
+                            &pb,
+                        )
+                        .await
+                    }
+                    Mode::Decrypt => {
+                        process_file_decrypt_async(
+                            &input_file,
+                            None,
+                            out_dir_clone.as_deref(),
+                            pw_clone.expect("password prompted"),
+                            &pb,
+                        )
+                        .await
+                    }
                 };
 
                 match &res {
                     Ok(_) => {
-                        let action = if is_encrypt {
-                            "encrypted"
-                        } else {
-                            "decrypted"
+                        let action = match mode {
+                            Mode::Optimize => "optimized",
+                            Mode::Encrypt => "encrypted",
+                            Mode::Decrypt => "decrypted",
                         };
                         pb.finish_with_message(format!("{} {}.", input_file, action));
                     }
@@ -271,73 +330,68 @@ async fn async_main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    if args.encrypt {
-        let input_file = args
-            .input_file
-            .ok_or_else(|| anyhow::anyhow!("Input file required when encrypting"))?;
-        let password = prompt_password(true)?;
-        let encryption = derive_key_from_password_async(password, None).await?;
+    let input_file = args
+        .input_file
+        .ok_or_else(|| anyhow::anyhow!("Please specify an input file (-i) or directory (--dir)"))?;
 
-        let pb = ProgressBar::new(7);
-        pb.set_style(
-            ProgressStyle::with_template(PROGRESS_TEMPLATE)?
-                .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ "),
-        );
-        pb.enable_steady_tick(std::time::Duration::from_millis(100));
+    let pb = ProgressBar::new(7);
+    pb.set_style(
+        ProgressStyle::with_template(PROGRESS_TEMPLATE)?
+            .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ "),
+    );
+    pb.enable_steady_tick(std::time::Duration::from_millis(100));
 
-        let output_file = if args.outfile.is_some() {
-            args.outfile.unwrap()
-        } else {
-            format!("{}_encrypted.png", strip_png_extension(&input_file))
-        };
+    match mode {
+        Mode::Optimize => {
+            let output_file = args
+                .outfile
+                .unwrap_or_else(|| format!("{}_optimized.png", strip_png_extension(&input_file)));
 
-        process_file_encrypt_async(
-            &input_file,
-            Some(output_file),
-            None,
-            encryption,
-            args.compression_level,
-            &pb,
-        )
-        .await?;
+            process_file_optimize_async(
+                &input_file,
+                Some(output_file),
+                None,
+                args.compression_level,
+                &pb,
+            )
+            .await?;
+        }
+        Mode::Encrypt => {
+            let password = prompt_password(true)?;
+            let encryption = derive_key_from_password_async(password, None).await?;
+            let output_file = args
+                .outfile
+                .unwrap_or_else(|| format!("{}_encrypted.png", strip_png_extension(&input_file)));
 
-        pb.finish();
-        return Ok(());
+            process_file_encrypt_async(
+                &input_file,
+                Some(output_file),
+                None,
+                encryption,
+                args.compression_level,
+                &pb,
+            )
+            .await?;
+        }
+        Mode::Decrypt => {
+            let password = prompt_password(false)?;
+            let output_file = args
+                .outfile
+                .unwrap_or_else(|| format!("{}_decrypted.png", strip_png_extension(&input_file)));
+
+            process_file_decrypt_async(
+                &input_file,
+                Some(output_file),
+                None,
+                password,
+                &pb,
+            )
+            .await?;
+        }
     }
 
-    if args.decrypt {
-        let input_file = args
-            .input_file
-            .ok_or_else(|| anyhow::anyhow!("Input file required when decrypting"))?;
-        let password = prompt_password(false)?;
-
-        let pb = ProgressBar::new(7);
-        pb.set_style(
-            ProgressStyle::with_template(PROGRESS_TEMPLATE)?
-                .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ "),
-        );
-        pb.enable_steady_tick(std::time::Duration::from_millis(100));
-
-        let output_file = if args.outfile.is_some() {
-            args.outfile.unwrap()
-        } else {
-            format!("{}_decrypted.png", strip_png_extension(&input_file))
-        };
-
-        process_file_decrypt_async(
-            &input_file,
-            Some(output_file),
-            None,
-            password,
-            &pb,
-        )
-        .await?;
-
-        pb.finish();
-        return Ok(());
-    }
-
-    bail!("Please specify -e (encrypt) or -d (decrypt)");
+    pb.finish();
+    Ok(())
 }
 
 fn main() -> anyhow::Result<()> {
@@ -485,5 +539,62 @@ mod tests {
             get_output_path("/tmp/photo.Png", Some("/out"), "_decrypted"),
             "/out/photo_decrypted.png"
         );
+    }
+
+    #[test]
+    fn test_resolve_mode_defaults_to_optimize_and_rejects_conflicts() {
+        let default_args = Args::parse_from(["pngmin", "-i", "in.png"]);
+        assert_eq!(resolve_mode(&default_args).unwrap(), Mode::Optimize);
+
+        let opt_args = Args::parse_from(["pngmin", "--optimize", "-i", "in.png"]);
+        assert_eq!(resolve_mode(&opt_args).unwrap(), Mode::Optimize);
+
+        let enc_args = Args::parse_from(["pngmin", "-e", "-i", "in.png"]);
+        assert_eq!(resolve_mode(&enc_args).unwrap(), Mode::Encrypt);
+
+        let dec_args = Args::parse_from(["pngmin", "-d", "-i", "in.png"]);
+        assert_eq!(resolve_mode(&dec_args).unwrap(), Mode::Decrypt);
+
+        let conflict_ed = Args::parse_from(["pngmin", "-e", "-d", "-i", "in.png"]);
+        assert!(resolve_mode(&conflict_ed).is_err());
+
+        let conflict_oe = Args::parse_from(["pngmin", "--optimize", "-e", "-i", "in.png"]);
+        assert!(resolve_mode(&conflict_oe).is_err());
+    }
+
+    #[test]
+    fn test_process_file_optimize_async_roundtrip() {
+        smol::block_on(async {
+            let test_image = make_test_image();
+            let pb = ProgressBar::hidden();
+            let in_path = "target/test_opt_input.png";
+            let out_path = "target/test_opt_output.png";
+
+            test_image
+                .clone()
+                .save_optimized_async(in_path, CompressionLevel::Lossless, None, &pb)
+                .await
+                .unwrap();
+
+            process_file_optimize_async(
+                in_path,
+                Some(out_path.to_string()),
+                None,
+                CompressionLevel::Lossless,
+                &pb,
+            )
+            .await
+            .unwrap();
+
+            let optimized = DecodedPng::read_from_file_async(out_path, None, &pb)
+                .await
+                .unwrap();
+            assert_eq!(optimized.info.width, test_image.info.width);
+            assert_eq!(optimized.info.height, test_image.info.height);
+            assert_eq!(optimized.rgba, test_image.rgba);
+
+            let _ = smol::fs::remove_file(in_path).await;
+            let _ = smol::fs::remove_file(out_path).await;
+        });
     }
 }
