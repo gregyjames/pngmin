@@ -12,55 +12,46 @@ use zopfli::{compress, Format, Options};
 
 use crate::png::types::*;
 use crate::png::constants::*;
-use crate::png::optimization::{choose_best_filter_into, optimize_alpha_channel, quantize_colors, try_build_palette};
+use crate::png::optimization::{choose_best_filter_into, prepare_rgba_in_place, try_build_palette};
 
 impl DecodedPng {
-    pub fn encode_optimized(&self, compression_level: CompressionLevel, encryption: Option<&EncryptionKey>, pb: &ProgressBar) -> Result<Vec<u8>> {
+    pub fn into_encoded_optimized(
+        mut self,
+        compression_level: CompressionLevel,
+        encryption: Option<&EncryptionKey>,
+        pb: &ProgressBar,
+    ) -> Result<Vec<u8>> {
         let width = self.info.width as usize;
         let height = self.info.height as usize;
 
         pb.set_message("Optimizing image...");
-        let quantized_rgba = match compression_level {
-            CompressionLevel::Lossless => {
-                &self.rgba[..]
-            },
-            CompressionLevel::Balanced => {
-                &quantize_colors(&self.rgba, 6)
-            },
-            CompressionLevel::Maximum => {
-                &quantize_colors(&self.rgba, 4)
-            }
+        let quant_bits = match compression_level {
+            CompressionLevel::Lossless => None,
+            CompressionLevel::Balanced => Some(6),
+            CompressionLevel::Maximum => Some(4),
         };
-
-        let optimized_rgba = optimize_alpha_channel(quantized_rgba);
-
-        let palette_data = try_build_palette(&optimized_rgba);
+        let has_alpha = prepare_rgba_in_place(&mut self.rgba, quant_bits);
+        let palette_data = try_build_palette(&self.rgba);
 
         pb.inc(1);
 
         let (color_type, bytes_per_pixel, image_data, plte_trns) =
             if let Some((plte, trns, indices)) = palette_data {
+                drop(self.rgba);
                 (3u8, 1usize, indices, Some((plte, trns)))
+            } else if has_alpha {
+                (6u8, 4usize, self.rgba, None)
             } else {
-                let has_alpha = optimized_rgba.chunks_exact(4).any(|pixel| pixel[3] != 255);
-                let (ct, bpp) = if has_alpha {
-                    (6u8, 4usize) // RGBA
-                } else {
-                    (2u8, 3usize) // RGB
-                };
-                let mut data = Vec::with_capacity(height * width * bpp);
-                for y in 0..height {
-                    for x in 0..width {
-                        let idx = (y * width + x) * 4;
-                        data.push(optimized_rgba[idx]);     // R
-                        data.push(optimized_rgba[idx + 1]); // G
-                        data.push(optimized_rgba[idx + 2]); // B
-                        if bpp == 4 {
-                            data.push(optimized_rgba[idx + 3]); // A
-                        }
-                    }
+                let pixel_count = width * height;
+                for i in 0..pixel_count {
+                    let src = i * 4;
+                    let dst = i * 3;
+                    self.rgba[dst] = self.rgba[src];
+                    self.rgba[dst + 1] = self.rgba[src + 1];
+                    self.rgba[dst + 2] = self.rgba[src + 2];
                 }
-                (ct, bpp, data, None)
+                self.rgba.truncate(pixel_count * 3);
+                (2u8, 3usize, self.rgba, None)
             };
 
         let row_bytes = width * bytes_per_pixel;
@@ -159,24 +150,15 @@ impl DecodedPng {
         Ok(output_bytes)
     }
 
-    pub async fn save_optimized_async(&self, path: &str, compression_level: CompressionLevel, encryption: Option<EncryptionKey>, pb: &ProgressBar) -> Result<()> {
-        let this = self.clone();
+    pub async fn save_optimized_async(self, path: &str, compression_level: CompressionLevel, encryption: Option<EncryptionKey>, pb: &ProgressBar) -> Result<()> {
         let pb_clone = pb.clone();
         let encoded_bytes = smol::unblock(move || {
-            this.encode_optimized(compression_level, encryption.as_ref(), &pb_clone)
+            self.into_encoded_optimized(compression_level, encryption.as_ref(), &pb_clone)
         }).await?;
 
         smol::fs::write(path, &encoded_bytes)
             .await
             .with_context(|| format!("Could not write file {}", path))?;
-        Ok(())
-    }
-
-    #[allow(dead_code)]
-    pub fn save_optimized(&self, path: &str, compression_level: CompressionLevel, encryption: Option<&EncryptionKey>, pb: &ProgressBar) -> Result<()> {
-        let encoded_bytes = self.encode_optimized(compression_level, encryption, pb)?;
-        let mut file = std::fs::File::create(path).with_context(|| format!("Could not create file {}", path))?;
-        file.write_all(&encoded_bytes)?;
         Ok(())
     }
 }
@@ -234,7 +216,7 @@ mod tests {
 
         let pb = ProgressBar::hidden();
         let encoded = img
-            .encode_optimized(CompressionLevel::Lossless, None, &pb)
+            .into_encoded_optimized(CompressionLevel::Lossless, None, &pb)
             .unwrap();
         let decoded = DecodedPng::from_bytes(&encoded, None, &pb).unwrap();
 
@@ -263,7 +245,7 @@ mod tests {
             rgba: rgba_256.clone(),
         };
         let enc_256 = img_256
-            .encode_optimized(CompressionLevel::Lossless, None, &pb)
+            .into_encoded_optimized(CompressionLevel::Lossless, None, &pb)
             .unwrap();
         let dec_256 = DecodedPng::from_bytes(&enc_256, None, &pb).unwrap();
         assert_eq!(dec_256.info.color_type, 3);
@@ -284,7 +266,7 @@ mod tests {
             rgba: rgba_257.clone(),
         };
         let enc_257 = img_257
-            .encode_optimized(CompressionLevel::Lossless, None, &pb)
+            .into_encoded_optimized(CompressionLevel::Lossless, None, &pb)
             .unwrap();
         let dec_257 = DecodedPng::from_bytes(&enc_257, None, &pb).unwrap();
         assert_eq!(dec_257.info.color_type, 2);

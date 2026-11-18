@@ -3,17 +3,31 @@ use crate::png::filter::apply_filter_into;
 pub const BLACK_VEC: [u8; 4] = [0, 0, 0, 0];
 pub const FILTERS: [u8; 4] = [1u8, 2u8, 3u8, 4u8];
 
-pub fn optimize_alpha_channel(rgba: &[u8]) -> Vec<u8> {
-    //todo!("Think oxipng brute forces by actually compressing the bytes after the filter is applied? Maybe implement that for max compression.");
-    rgba.chunks_exact(4).map(|chunk| {
-        let a = chunk[3];
+/// Quantizes RGB channels in-place (if `bits` is `Some(1..=7)`), zeroes RGB on
+/// fully transparent pixels, and returns whether any pixel has non-opaque alpha (`a != 255`).
+pub fn prepare_rgba_in_place(rgba: &mut [u8], bits: Option<u8>) -> bool {
+    let quant_params = bits
+        .filter(|&b| b > 0 && b < 8)
+        .map(|b| (8 - b, (1u16 << b) - 1));
 
-        if a == 0{
-            BLACK_VEC
-        }else{
-            [chunk[0], chunk[1], chunk[2], a]
+    let mut has_alpha = false;
+    for pixel in rgba.chunks_exact_mut(4) {
+        let a = pixel[3];
+        if a == 0 {
+            pixel.copy_from_slice(&BLACK_VEC);
+            has_alpha = true;
+        } else {
+            if let Some((shift, max_q)) = quant_params {
+                pixel[0] = quantize_channel(pixel[0], shift, max_q);
+                pixel[1] = quantize_channel(pixel[1], shift, max_q);
+                pixel[2] = quantize_channel(pixel[2], shift, max_q);
+            }
+            if a != 255 {
+                has_alpha = true;
+            }
         }
-    }).flatten().collect()
+    }
+    has_alpha
 }
 
 // apparently, according to GPT small values near zero compress better? So this is a cheap scoring metric
@@ -44,26 +58,6 @@ pub fn choose_best_filter_into(
     }
 
     best_filter
-}
-
-// https://en.wikipedia.org/wiki/Color_depth
-// https://www.geeksforgeeks.org/electronics-engineering/difference-between-uniform-and-non-uniform-quantization/
-pub fn quantize_colors(rgba: &[u8], bits: u8) -> Vec<u8> {
-    if bits == 0 || bits >= 8 {
-        return rgba.to_vec();
-    }
-
-    let shift = 8 - bits;
-    let max_q = ((1u16 << bits) - 1) as u16;
-
-    rgba.chunks_exact(4).flat_map(|pixel| {
-        [
-            quantize_channel(pixel[0], shift, max_q),
-            quantize_channel(pixel[1], shift, max_q),
-            quantize_channel(pixel[2], shift, max_q),
-            pixel[3], // Don't quantize alpha
-        ]
-    }).collect()
 }
 
 #[inline]
@@ -115,7 +109,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_quantize_colors_preserves_black_white_and_alpha() {
+    fn test_prepare_rgba_in_place_preserves_black_white_and_alpha() {
         let input = [
             0, 0, 0, 0,
             255, 255, 255, 128,
@@ -123,7 +117,8 @@ mod tests {
         ];
 
         for bits in [4, 6] {
-            let out = quantize_colors(&input, bits);
+            let mut out = input;
+            assert!(prepare_rgba_in_place(&mut out, Some(bits)));
             // Black stays black
             assert_eq!(&out[0..4], &[0, 0, 0, 0]);
             // Pure white stays pure white (255), alpha preserved
@@ -134,9 +129,26 @@ mod tests {
     }
 
     #[test]
-    fn test_quantize_colors_eight_bits_is_lossless() {
+    fn test_prepare_rgba_in_place_lossless_and_eight_bits() {
         let input = [12, 34, 56, 78, 255, 0, 127, 200];
-        assert_eq!(quantize_colors(&input, 8), input);
+        let mut out_none = input;
+        assert!(prepare_rgba_in_place(&mut out_none, None));
+        assert_eq!(out_none, input);
+
+        let mut out_eight = input;
+        assert!(prepare_rgba_in_place(&mut out_eight, Some(8)));
+        assert_eq!(out_eight, input);
+    }
+
+    #[test]
+    fn test_prepare_rgba_in_place_zeroes_transparent_rgb_and_tracks_alpha() {
+        let mut opaque = [12, 34, 56, 255, 200, 100, 50, 255];
+        assert!(!prepare_rgba_in_place(&mut opaque, None));
+        assert_eq!(opaque, [12, 34, 56, 255, 200, 100, 50, 255]);
+
+        let mut with_transparent = [123, 45, 67, 0, 12, 34, 56, 1];
+        assert!(prepare_rgba_in_place(&mut with_transparent, None));
+        assert_eq!(with_transparent, [0, 0, 0, 0, 12, 34, 56, 1]);
     }
 
     #[test]

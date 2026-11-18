@@ -404,6 +404,7 @@ mod tests {
                 let dec_path = format!("target/test_level_{:?}_dec.png", level);
 
                 test_image
+                    .clone()
                     .save_optimized_async(&enc_path, level.clone(), Some(enc.clone()), &pb)
                     .await
                     .unwrap();
@@ -455,7 +456,7 @@ mod tests {
             let test_image = make_test_image();
             let pb = ProgressBar::hidden();
             let plain_bytes = test_image
-                .encode_optimized(CompressionLevel::Lossless, None, &pb)
+                .into_encoded_optimized(CompressionLevel::Lossless, None, &pb)
                 .unwrap();
 
             let res = DecodedPng::from_bytes(&plain_bytes, Some("any-pw"), &pb);
